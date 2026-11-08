@@ -1,0 +1,146 @@
+import type { ContentLanguage, RoomInfoResponse } from "@opg/protocol";
+import type { Limiter } from "../limits";
+import {
+  createRouter,
+  type AssetFetcher,
+  type RoomBudget,
+  type RoomNamespace,
+  type RoomStub,
+  type RouteDeps,
+} from "../routes";
+
+export class FakeRooms implements RoomNamespace {
+  readonly taken: Set<string>;
+  readonly initCalls: {
+    code: string;
+    hostToken: string;
+    sharedScreen: boolean;
+    contentLanguage: ContentLanguage;
+  }[] = [];
+  readonly forwarded: string[] = [];
+  infoCalls = 0;
+  info: RoomInfoResponse | null = null;
+
+  constructor(taken: string[] = []) {
+    this.taken = new Set(taken);
+  }
+
+  getByName(_code: string): RoomStub {
+    return {
+      init: async (initCode, hostToken, sharedScreen = true, contentLanguage = "en") => {
+        this.initCalls.push({ code: initCode, hostToken, sharedScreen, contentLanguage });
+        return !this.taken.has(initCode);
+      },
+      info: async () => {
+        this.infoCalls += 1;
+        return this.info;
+      },
+      fetch: async (request) => {
+        this.forwarded.push(request.url);
+        return new Response("upgraded", { status: 200 });
+      },
+    };
+  }
+}
+
+/** Serves `files` (path to content type) and answers anything else like the SPA fallback. */
+export class FakeAssets implements AssetFetcher {
+  readonly requests: string[] = [];
+  readonly files = new Map<string, string>();
+
+  async fetch(request: Request): Promise<Response> {
+    this.requests.push(request.url);
+    const type = this.files.get(new URL(request.url).pathname) ?? "text/html; charset=utf-8";
+    return new Response("assets", { status: 200, headers: { "content-type": type } });
+  }
+}
+
+export function limiter(success: boolean, keys: string[] = []): Limiter {
+  return {
+    limit: async ({ key }) => {
+      keys.push(key);
+      return { success };
+    },
+  };
+}
+
+/** Router dependencies wired to fakes, with knobs the tests flip. */
+export class RoutesHarness {
+  readonly rooms: FakeRooms;
+  readonly assets = new FakeAssets();
+  readonly budgetDays: string[] = [];
+  readonly releasedDays: string[] = [];
+  /** Rooms today's counter holds: `tryConsume` adds one, `release` takes one back. */
+  roomCount = 0;
+  readonly codes: string[];
+  budgetAllows = true;
+  budgetFails = false;
+  budgetReleaseFails = false;
+  createLimiter: Limiter | undefined;
+  joinLimiter: Limiter | undefined;
+  private time = 1_700_000_000_000;
+  private hostSeq = 0;
+  private codeIndex = 0;
+
+  constructor(options: { codes?: string[]; taken?: string[] } = {}) {
+    this.codes = options.codes ?? ["BCDF", "GHJK", "LMNP", "QRST"];
+    this.rooms = new FakeRooms(options.taken ?? []);
+  }
+
+  /** `body` is sent verbatim, so a test can send well-formed JSON, an empty string or garbage text. */
+  request(
+    method: string,
+    path: string,
+    headers: Record<string, string> = {},
+    body?: string,
+  ): Promise<Response> {
+    const request = new Request(`https://party.test${path}`, {
+      method,
+      headers,
+      body,
+    });
+    return createRouter(this.deps())(request);
+  }
+
+  private deps(): RouteDeps {
+    return {
+      rooms: this.rooms,
+      budget: this.budget(),
+      limiters: { create: this.createLimiter, join: this.joinLimiter },
+      assets: this.assets,
+      now: () => this.time,
+      newHostToken: () => `host-${++this.hostSeq}`,
+      newRoomCode: () => this.nextCode(),
+    };
+  }
+
+  private budget(): RoomBudget {
+    return {
+      tryConsume: async (day: string): Promise<boolean> => {
+        this.budgetDays.push(day);
+        if (this.budgetFails) throw new Error("d1 unavailable");
+        if (!this.budgetAllows) return false;
+        this.roomCount += 1;
+        return true;
+      },
+      release: async (day: string): Promise<void> => {
+        if (this.budgetReleaseFails) throw new Error("d1 unavailable");
+        this.releasedDays.push(day);
+        this.roomCount = Math.max(0, this.roomCount - 1);
+      },
+    };
+  }
+
+  private nextCode(): string {
+    const code = this.codes[this.codeIndex % this.codes.length] ?? "BCDF";
+    this.codeIndex += 1;
+    return code;
+  }
+}
+
+export function makeRoutes(options: {
+  codes?: string[];
+  taken?: string[];
+} = {}): RoutesHarness {
+  return new RoutesHarness(options);
+}

@@ -1,0 +1,1071 @@
+{
+  "pages": [
+    {
+      "id": "setup",
+      "name": "Setup"
+    },
+    {
+      "id": "imposter",
+      "name": "Imposter"
+    },
+    {
+      "id": "real-or-nah",
+      "name": "Real or Nah"
+    },
+    {
+      "id": "end-system",
+      "name": "End & system"
+    },
+    {
+      "id": "no-tv",
+      "name": "No-TV mode"
+    },
+    {
+      "id": "doodle-bluff",
+      "name": "Doodle Bluff"
+    },
+    {
+      "id": "sketch-phone",
+      "name": "Sketch Phone (proposed)"
+    },
+    {
+      "id": "style-options",
+      "name": "Style options (not picked)"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "TVLanding.dc.html",
+      "title": "TV \u00b7 Landing",
+      "page": "setup",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "app",
+        "label": "TV: landing"
+      }
+    },
+    {
+      "file": "Main.dc.html",
+      "title": "TV \u00b7 Lobby",
+      "page": "setup",
+      "x": 2040,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "app",
+        "label": "TV: lobby"
+      }
+    },
+    {
+      "file": "TVGamePicker.dc.html",
+      "title": "TV \u00b7 Game picker",
+      "page": "setup",
+      "x": 4080,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "app",
+        "label": "TV: game picker"
+      }
+    },
+    {
+      "file": "PhoneJoin.dc.html",
+      "title": "Phone \u00b7 Join",
+      "page": "setup",
+      "x": 2040,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "app",
+        "label": "Phone: join a room"
+      }
+    },
+    {
+      "file": "PhoneAvatarPicker.dc.html",
+      "title": "Phone \u00b7 Pick a doodle",
+      "page": "setup",
+      "x": 2530,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "app",
+        "label": "Phone: avatar picker"
+      }
+    },
+    {
+      "file": "PhoneLobby.dc.html",
+      "title": "Phone \u00b7 Lobby",
+      "page": "setup",
+      "x": 3020,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "app",
+        "label": "Phone: lobby, shared screen"
+      }
+    },
+    {
+      "file": "PhoneVIPControls.dc.html",
+      "title": "Phone \u00b7 VIP controls (scrolls)",
+      "page": "setup",
+      "x": 4080,
+      "y": 1280,
+      "w": 390,
+      "h": 1240,
+      "screen": {
+        "game": "app",
+        "label": "Phone: VIP controls"
+      }
+    },
+    {
+      "file": "TVImposterWordCheck.dc.html",
+      "title": "TV \u00b7 Imposter \u00b7 Check your phones",
+      "page": "imposter",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "imposter",
+        "label": "Host: check your phones"
+      }
+    },
+    {
+      "file": "TVImposterClues.dc.html",
+      "title": "TV \u00b7 Imposter \u00b7 Clue turns",
+      "page": "imposter",
+      "x": 2040,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "imposter",
+        "label": "Host: clues"
+      }
+    },
+    {
+      "file": "TVImposterVoting.dc.html",
+      "title": "TV \u00b7 Imposter \u00b7 Voting",
+      "page": "imposter",
+      "x": 4080,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "imposter",
+        "label": "Host: vote"
+      }
+    },
+    {
+      "file": "TVImposterReveal.dc.html",
+      "title": "TV \u00b7 Imposter \u00b7 Reveal",
+      "page": "imposter",
+      "x": 6120,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "imposter",
+        "label": "Host: reveal"
+      }
+    },
+    {
+      "file": "TVImposterLastChance.dc.html",
+      "title": "TV \u00b7 Imposter \u00b7 Last chance",
+      "page": "imposter",
+      "x": 8160,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "imposter",
+        "label": "Host: last chance"
+      }
+    },
+    {
+      "file": "TVImposterResult.dc.html",
+      "title": "TV \u00b7 Imposter \u00b7 Round result",
+      "page": "imposter",
+      "x": 10200,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "imposter",
+        "label": "Host: result caught nope"
+      }
+    },
+    {
+      "file": "PhoneImposterCrewCard.dc.html",
+      "title": "Phone \u00b7 Imposter \u00b7 Crew word",
+      "page": "imposter",
+      "x": 0,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone: Maya crew card"
+      }
+    },
+    {
+      "file": "PhoneImposterCard.dc.html",
+      "title": "Phone \u00b7 Imposter \u00b7 Imposter card",
+      "page": "imposter",
+      "x": 490,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone: Priya imposter card"
+      }
+    },
+    {
+      "file": "PhoneImposterYourTurn.dc.html",
+      "title": "Phone \u00b7 Imposter \u00b7 Your turn",
+      "page": "imposter",
+      "x": 2040,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone: Dov your turn"
+      }
+    },
+    {
+      "file": "PhoneImposterVote.dc.html",
+      "title": "Phone \u00b7 Imposter \u00b7 Vote",
+      "page": "imposter",
+      "x": 4080,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone: Dov vote selecting"
+      }
+    },
+    {
+      "file": "PhoneImposterLastChance.dc.html",
+      "title": "Phone \u00b7 Imposter \u00b7 Last-chance guess",
+      "page": "imposter",
+      "x": 8160,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone: Priya last chance"
+      }
+    },
+    {
+      "file": "TVRealOrNahWrite.dc.html",
+      "title": "TV \u00b7 Real or Nah \u00b7 Write lies",
+      "page": "real-or-nah",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "real-or-nah",
+        "label": "Host: write"
+      }
+    },
+    {
+      "file": "TVRealOrNahVote.dc.html",
+      "title": "TV \u00b7 Real or Nah \u00b7 Vote",
+      "page": "real-or-nah",
+      "x": 2040,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "real-or-nah",
+        "label": "Host: vote"
+      }
+    },
+    {
+      "file": "TVRealOrNahReveal.dc.html",
+      "title": "TV \u00b7 Real or Nah \u00b7 Reveal",
+      "page": "real-or-nah",
+      "x": 4080,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "real-or-nah",
+        "label": "Host: reveal, 3 foolers"
+      }
+    },
+    {
+      "file": "PhoneRealOrNahWrite.dc.html",
+      "title": "Phone \u00b7 Real or Nah \u00b7 Write a lie",
+      "page": "real-or-nah",
+      "x": 0,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "real-or-nah",
+        "label": "Phone: Dov writing"
+      }
+    },
+    {
+      "file": "PhoneRealOrNahVote.dc.html",
+      "title": "Phone \u00b7 Real or Nah \u00b7 Vote",
+      "page": "real-or-nah",
+      "x": 2040,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "real-or-nah",
+        "label": "Phone: Dov voting"
+      }
+    },
+    {
+      "file": "TVFinalScores.dc.html",
+      "title": "TV \u00b7 Final scores",
+      "page": "end-system",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "app",
+        "label": "TV: final scores, crown with awards"
+      }
+    },
+    {
+      "file": "TVFullTonight.dc.html",
+      "title": "TV \u00b7 We're full tonight",
+      "page": "end-system",
+      "x": 2040,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "app",
+        "label": "TV: room limit reached tonight"
+      }
+    },
+    {
+      "file": "TVCredits.dc.html",
+      "title": "TV \u00b7 Credits",
+      "page": "end-system",
+      "x": 4080,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "app",
+        "label": "TV: credits"
+      }
+    },
+    {
+      "file": "PhoneWaitingNextGame.dc.html",
+      "title": "Phone \u00b7 Waiting for next game",
+      "page": "end-system",
+      "x": 0,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "app",
+        "label": "Phone: waiting for the next game"
+      }
+    },
+    {
+      "file": "PhoneReconnecting.dc.html",
+      "title": "Phone \u00b7 Reconnecting",
+      "page": "end-system",
+      "x": 490,
+      "y": 1280,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "app",
+        "label": "Phone: reconnecting"
+      }
+    },
+    {
+      "file": "DirectionATV.dc.html",
+      "title": "A \u00b7 Sticker Shop \u00b7 TV lobby",
+      "page": "style-options",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080
+    },
+    {
+      "file": "DirectionAPhone.dc.html",
+      "title": "A \u00b7 Sticker Shop \u00b7 Phone, imposter card",
+      "page": "style-options",
+      "x": 2040,
+      "y": 0,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "DirectionBTV.dc.html",
+      "title": "B \u00b7 Saturday Morning \u00b7 TV lobby",
+      "page": "style-options",
+      "x": 0,
+      "y": 1320,
+      "w": 1920,
+      "h": 1080
+    },
+    {
+      "file": "DirectionBPhone.dc.html",
+      "title": "B \u00b7 Saturday Morning \u00b7 Phone, imposter card",
+      "page": "style-options",
+      "x": 2040,
+      "y": 1320,
+      "w": 390,
+      "h": 844
+    },
+    {
+      "file": "PhoneNoTvLanding.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Start or join",
+      "page": "no-tv",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "app",
+        "label": "Phone: landing"
+      }
+    },
+    {
+      "file": "PhoneNoTvLobbyStarter.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Lobby (starter)",
+      "page": "no-tv",
+      "x": 450,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "screen": null
+    },
+    {
+      "file": "PhoneNoTvLobbyPlayer.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Lobby (not the VIP)",
+      "page": "no-tv",
+      "x": 900,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "app",
+        "label": "Phone: lobby, worst case (no shared screen, 8 long names)"
+      }
+    },
+    {
+      "file": "PhoneNoTvVipPicker.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 VIP picker, blocked game",
+      "page": "no-tv",
+      "x": 1350,
+      "y": 0,
+      "w": 390,
+      "h": 1240,
+      "screen": {
+        "game": "app",
+        "label": "Phone: VIP controls, worst case (8 long names, every pack, an error)"
+      }
+    },
+    {
+      "file": "PhoneNoTvMltVote.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Most Likely To \u00b7 Vote",
+      "page": "no-tv",
+      "x": 1800,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "most-likely-to",
+        "label": "Phone (no-TV): Dov vote selecting"
+      }
+    },
+    {
+      "file": "PhoneNoTvMltReveal.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Most Likely To \u00b7 Reveal",
+      "page": "no-tv",
+      "x": 2250,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "most-likely-to",
+        "label": "Phone (no-TV): Priya reveal settled"
+      }
+    },
+    {
+      "file": "PhoneNoTvImposterWordCheck.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Imposter \u00b7 Word check",
+      "page": "no-tv",
+      "x": 0,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone (no-TV): Maya crew card"
+      }
+    },
+    {
+      "file": "PhoneNoTvImposterClues.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Imposter \u00b7 Clue turns",
+      "page": "no-tv",
+      "x": 450,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone (no-TV): Priya watching Dov's clue"
+      }
+    },
+    {
+      "file": "PhoneNoTvImposterVote.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Imposter \u00b7 Vote",
+      "page": "no-tv",
+      "x": 900,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone (no-TV): Dov vote selecting"
+      }
+    },
+    {
+      "file": "PhoneNoTvImposterReveal.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Imposter \u00b7 Reveal",
+      "page": "no-tv",
+      "x": 1350,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone (no-TV): Dov reveal settled"
+      }
+    },
+    {
+      "file": "PhoneNoTvImposterLastChance.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Imposter \u00b7 Last chance",
+      "page": "no-tv",
+      "x": 1800,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone (no-TV): Priya last chance"
+      }
+    },
+    {
+      "file": "PhoneNoTvImposterResult.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Imposter \u00b7 Round result",
+      "page": "no-tv",
+      "x": 2250,
+      "y": 1440,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "imposter",
+        "label": "Phone (no-TV): Dov result settled"
+      }
+    },
+    {
+      "file": "PhoneDoodleBluffDraw.dc.html",
+      "title": "Phone \u00b7 Doodle Bluff \u00b7 Draw",
+      "page": "doodle-bluff",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Phone: Dov drawing"
+      }
+    },
+    {
+      "file": "PhoneDoodleBluffTitle.dc.html",
+      "title": "Phone \u00b7 Doodle Bluff \u00b7 Write a title",
+      "page": "doodle-bluff",
+      "x": 490,
+      "y": 0,
+      "w": 390,
+      "h": 1340,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Phone: Maya writing a title"
+      }
+    },
+    {
+      "file": "PhoneDoodleBluffVote.dc.html",
+      "title": "Phone \u00b7 Doodle Bluff \u00b7 Vote",
+      "page": "doodle-bluff",
+      "x": 980,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Phone: Maya voting"
+      }
+    },
+    {
+      "file": "TVDoodleBluffDraw.dc.html",
+      "title": "TV \u00b7 Doodle Bluff \u00b7 Everyone is drawing",
+      "page": "doodle-bluff",
+      "x": 0,
+      "y": 1500,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Host: draw"
+      }
+    },
+    {
+      "file": "TVDoodleBluffTitle.dc.html",
+      "title": "TV \u00b7 Doodle Bluff \u00b7 Titling",
+      "page": "doodle-bluff",
+      "x": 2040,
+      "y": 1500,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Host: title"
+      }
+    },
+    {
+      "file": "TVDoodleBluffVote.dc.html",
+      "title": "TV \u00b7 Doodle Bluff \u00b7 Vote",
+      "page": "doodle-bluff",
+      "x": 4080,
+      "y": 1500,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Host: vote"
+      }
+    },
+    {
+      "file": "TVDoodleBluffReveal.dc.html",
+      "title": "TV \u00b7 Doodle Bluff \u00b7 Reveal",
+      "page": "doodle-bluff",
+      "x": 6120,
+      "y": 1500,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Host: reveal found"
+      }
+    },
+    {
+      "file": "TVDoodleBluffGallery.dc.html",
+      "title": "TV \u00b7 Doodle Bluff \u00b7 Gallery",
+      "page": "doodle-bluff",
+      "x": 8160,
+      "y": 1500,
+      "w": 1920,
+      "h": 1080,
+      "screen": {
+        "game": "doodle-bluff",
+        "label": "Host: gallery"
+      }
+    },
+    {
+      "file": "TVSketchPhoneWrite.dc.html",
+      "title": "TV \u00b7 Sketch Phone \u00b7 Everyone writes",
+      "page": "sketch-phone",
+      "x": 0,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": { "game": "sketch-phone", "label": "Host: write" }
+    },
+    {
+      "file": "TVSketchPhoneRound.dc.html",
+      "title": "TV \u00b7 Sketch Phone \u00b7 Passing round",
+      "page": "sketch-phone",
+      "x": 2040,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": { "game": "sketch-phone", "label": "Host: passing round" }
+    },
+    {
+      "file": "TVSketchPhoneReplay.dc.html",
+      "title": "TV \u00b7 Sketch Phone \u00b7 Replay",
+      "page": "sketch-phone",
+      "x": 4080,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": { "game": "sketch-phone", "label": "Host: replay" }
+    },
+    {
+      "file": "TVSketchPhoneVote.dc.html",
+      "title": "TV \u00b7 Sketch Phone \u00b7 Pick a favourite",
+      "page": "sketch-phone",
+      "x": 6120,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": { "game": "sketch-phone", "label": "Host: vote" }
+    },
+    {
+      "file": "TVSketchPhoneFavourite.dc.html",
+      "title": "TV \u00b7 Sketch Phone \u00b7 Favourite link",
+      "page": "sketch-phone",
+      "x": 8160,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": { "game": "sketch-phone", "label": "Host: favourite" }
+    },
+    {
+      "file": "TVSketchPhoneReplayHe.dc.html",
+      "title": "TV \u00b7 Sketch Phone \u00b7 Replay (Hebrew)",
+      "page": "sketch-phone",
+      "x": 10200,
+      "y": 0,
+      "w": 1920,
+      "h": 1080,
+      "screen": { "game": "sketch-phone", "label": "Host: replay" }
+    },
+    {
+      "file": "PhoneSketchPhoneWrite.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Write the first line",
+      "page": "sketch-phone",
+      "x": 0,
+      "y": 1300,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Maya writing" }
+    },
+    {
+      "file": "PhoneSketchPhoneDraw.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Draw what you got",
+      "page": "sketch-phone",
+      "x": 490,
+      "y": 1300,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Sam drawing" }
+    },
+    {
+      "file": "PhoneSketchPhoneDescribe.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Describe the drawing",
+      "page": "sketch-phone",
+      "x": 980,
+      "y": 1300,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Noa describing" }
+    },
+    {
+      "file": "PhoneSketchPhoneSent.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Sent, waiting",
+      "page": "sketch-phone",
+      "x": 1470,
+      "y": 1300,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Maya sent" }
+    },
+    {
+      "file": "PhoneSketchPhoneTimesUp.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Time's up",
+      "page": "sketch-phone",
+      "x": 1960,
+      "y": 1300,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Maya sent" }
+    },
+    {
+      "file": "PhoneSketchPhonePresent.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Showing your chain",
+      "page": "sketch-phone",
+      "x": 2450,
+      "y": 1300,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Priya presenting" }
+    },
+    {
+      "file": "PhoneSketchPhoneVote.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Pick a favourite (scrolls)",
+      "page": "sketch-phone",
+      "x": 2940,
+      "y": 1300,
+      "w": 390,
+      "h": 1240,
+      "screen": { "game": "sketch-phone", "label": "Phone: Sam voting" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneDraw.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Draw",
+      "page": "sketch-phone",
+      "x": 0,
+      "y": 2740,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Sam drawing" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneReplay.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Replay, showing your chain",
+      "page": "sketch-phone",
+      "x": 490,
+      "y": 2740,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Priya presenting" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneReplayWatch.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Replay, watching",
+      "page": "sketch-phone",
+      "x": 980,
+      "y": 2740,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Sam watching" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneVote.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Pick a favourite (scrolls)",
+      "page": "sketch-phone",
+      "x": 1470,
+      "y": 2740,
+      "w": 390,
+      "h": 1240,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Sam voting" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneFavourite.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Favourite link",
+      "page": "sketch-phone",
+      "x": 1960,
+      "y": 2740,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Priya favourite" }
+    },
+    {
+      "file": "PhoneSketchPhoneWriteHe.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Write (Hebrew)",
+      "page": "sketch-phone",
+      "x": 0,
+      "y": 4180,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Maya writing" }
+    },
+    {
+      "file": "PhoneSketchPhoneDrawHe.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Draw (Hebrew)",
+      "page": "sketch-phone",
+      "x": 490,
+      "y": 4180,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Sam drawing" }
+    },
+    {
+      "file": "PhoneSketchPhoneDescribeHe.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Describe (Hebrew)",
+      "page": "sketch-phone",
+      "x": 980,
+      "y": 4180,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone: Noa describing" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneReplayHe.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Replay (Hebrew)",
+      "page": "sketch-phone",
+      "x": 1470,
+      "y": 4180,
+      "w": 390,
+      "h": 844,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Priya presenting" }
+    },
+    {
+      "file": "PhoneSketchPhoneVoteHe.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Pick a favourite (Hebrew, scrolls)",
+      "page": "sketch-phone",
+      "x": 1960,
+      "y": 4180,
+      "w": 390,
+      "h": 1240,
+      "screen": { "game": "sketch-phone", "label": "Phone: Sam voting" }
+    },
+    {
+      "file": "PhoneSketchPhoneDraw360.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Draw, 360 wide, longest line",
+      "page": "sketch-phone",
+      "x": 0,
+      "y": 5620,
+      "w": 360,
+      "h": 780,
+      "screen": { "game": "sketch-phone", "label": "Phone: Sam drawing" }
+    },
+    {
+      "file": "PhoneSketchPhoneDrawHe360.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Draw, 360 wide, Hebrew, longest line",
+      "page": "sketch-phone",
+      "x": 490,
+      "y": 5620,
+      "w": 360,
+      "h": 780,
+      "screen": { "game": "sketch-phone", "label": "Phone: Sam drawing" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneReplay360.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Replay, 360 wide",
+      "page": "sketch-phone",
+      "x": 980,
+      "y": 5620,
+      "w": 360,
+      "h": 780,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Priya presenting" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneReplayHe360.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Replay, 360 wide, Hebrew",
+      "page": "sketch-phone",
+      "x": 1470,
+      "y": 5620,
+      "w": 360,
+      "h": 780,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Priya presenting" }
+    },
+    {
+      "file": "PhoneSketchPhoneDraw430.dc.html",
+      "title": "Phone \u00b7 Sketch Phone \u00b7 Draw, 430 wide",
+      "page": "sketch-phone",
+      "x": 1960,
+      "y": 5620,
+      "w": 430,
+      "h": 932,
+      "screen": { "game": "sketch-phone", "label": "Phone: Sam drawing" }
+    },
+    {
+      "file": "PhoneNoTvSketchPhoneReplay430.dc.html",
+      "title": "Phone \u00b7 No-TV \u00b7 Sketch Phone \u00b7 Replay, 430 wide",
+      "page": "sketch-phone",
+      "x": 2490,
+      "y": 5620,
+      "w": 430,
+      "h": 932,
+      "screen": { "game": "sketch-phone", "label": "Phone (no-TV): Priya presenting" }
+    }
+  ],
+  "annotations": [
+    {
+      "id": "setup-notes",
+      "page": "setup",
+      "x": 0,
+      "y": 1280,
+      "w": 900,
+      "text": "Setup flow. The TV only needs input to start the room; after that the VIP (first phone to join) runs everything from their phone, and the TV mirrors what they pick.\nAll names, the room code and the QR are sample content."
+    },
+    {
+      "id": "imposter-notes",
+      "page": "imposter",
+      "x": 6120,
+      "y": 1280,
+      "w": 900,
+      "text": "Imposter, one word shown end to end: Priya holds the decoy (ZEBRA), the crew has GIRAFFE.\n\nAssumptions to check:\n- The speaker taps \"I'm done\" to pass the turn, or the timer runs out.\n- You can vote for anyone but yourself.\n- The crew's word stays hidden on the TV until the imposter's last guess is in.\n- Point values are placeholders until the spec sets scoring.\n- Not drawn yet: the round where the imposter escapes the vote."
+    },
+    {
+      "id": "real-or-nah-notes",
+      "page": "real-or-nah",
+      "x": 4080,
+      "y": 1280,
+      "w": 900,
+      "text": "Real or Nah, one fact shown end to end.\n\nAssumptions to check:\n- The reveal puts everything on one screen here; the build can play it lie by lie.\n- Answers appear in the same shuffled order on the TV and every phone.\n- Point values are placeholders until the spec sets scoring."
+    },
+    {
+      "id": "end-notes",
+      "page": "end-system",
+      "x": 1000,
+      "y": 1280,
+      "w": 900,
+      "text": "End of a game and the system states. Bracketed items on the credits and full-tonight screens are real facts still to fill in (repo URL, music, sound effects)."
+    },
+    {
+      "id": "style-intro",
+      "page": "style-options",
+      "x": 0,
+      "y": -260,
+      "w": 1100,
+      "text": "The two style options that weren't picked, kept for reference. Doodle Notebook (option C) is now the main set on the other pages."
+    },
+    {
+      "id": "direction-a",
+      "page": "style-options",
+      "x": 2530,
+      "y": 0,
+      "w": 460,
+      "text": "A \u00b7 Sticker Shop\nThick ink outlines, hard offset shadows, flat bold colors on warm cream. Lilita One + Nunito."
+    },
+    {
+      "id": "direction-b",
+      "page": "style-options",
+      "x": 2530,
+      "y": 1320,
+      "w": 460,
+      "text": "B \u00b7 Saturday Morning\nDeep grape stage, candy-colored bubbles, no outlines. Titan One + Baloo 2."
+    },
+    {
+      "id": "no-tv-notes",
+      "page": "no-tv",
+      "x": 0,
+      "y": 1180,
+      "w": 1100,
+      "text": "No-TV mode: no shared screen anywhere. Every phone carries the shared stage on top and that player's own controls below.\n\nTop row is the platform: starting a room from a phone, the room code read aloud, and a game that needs a TV shown disabled rather than hidden.\nSecond row is Imposter in phase order. Word check deliberately shows an empty stage \u2014 a phase shows the stage or your secret, never both.\n\nPhones are silent here, haptics only, so the Suspense ring on Reveal and Last chance is the visual standing in for the drumroll.\nAll names, the room code and the words are sample content."
+    },
+    {
+      "id": "doodle-bluff-notes",
+      "page": "doodle-bluff",
+      "x": 0,
+      "y": 1240,
+      "w": 1100,
+      "text": "Doodle Bluff. Everyone draws two secret prompts up front, then drawings are shown one at a time: everyone but the artist writes a fake title, then the room votes for the real one.\n\nThe six marker inks are settled here, contrast-checked against the paper. Colour is decoration only \u2014 no rule, score, title or vote ever reads a stroke's colour.\n\nThe gallery is the finale: every drawing made in the game, including the ones never titled, and then they die with the room.\nAll names, prompts and titles are sample content."
+    },
+    {
+      "id": "sketch-phone-notes",
+      "page": "sketch-phone",
+      "x": 3500,
+      "y": 1300,
+      "w": 1100,
+      "text": "Sketch Phone, proposed for issue #145. Nothing here is built yet. Every player starts a chain with a line of words. Each round the chains move one seat on, and the rounds take turns: draw what you got, then describe the drawing you got. At the end every chain plays back, one link at a time.\n\nProposals for the open questions (the plan settles them):\n- Chain length: the player count, rounded down to an odd number and capped at 7 (3 or 4 players: 3 links; 8 players: 7). A chain always starts and ends with words, so the end can be read against the start. At 8 players one player sits out each chain; Maya isn't in Priya's.\n- Times: write 45 s, draw 75 s, describe 40 s. About 6 minutes of play at 8 players, then about 70 s of replay and vote per chain.\n- The chain's starter presents it: their phone holds Next, and the link moves on by itself after 10 s. Phones that aren't presenting show the kit's Look up screen while there's a TV.\n- Scoring: after each chain, everyone picks a favourite link that isn't their own. Each vote is +100 for that link's author; ties share. Final scores and the crown use the platform's existing screens, so nothing new is drawn for them.\n- Words are capped at 50 characters; 'Give me one' fills the first line from the drawing-prompts pack.\n- Time runs out: a drawing goes on as it is. An empty line is replaced from the pack and tagged 'Out of time' in the replay.\n- No shared screen: the game opts in. Each phone carries the replay as its stage, with the presenter's Next button or a line saying who has it below.\n\nRows: the TV; phones with a TV; phones alone; Hebrew, right to left; the 360 and 430 wide phones with the longest line (50 characters) and 12-character names.\nAll names, lines and drawings are sample content."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "setup"
+  }
+}

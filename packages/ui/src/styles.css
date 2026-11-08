@@ -1,0 +1,272 @@
+/* OpenPartyGames Doodle Notebook UI kit. Tokens, fonts and shared helpers. */
+@import "@fontsource/permanent-marker/index.css";
+@import "@fontsource/atkinson-hyperlegible/400.css";
+@import "@fontsource/atkinson-hyperlegible/700.css";
+/* The Hebrew faces are NOT imported here. Neither Latin face has Hebrew glyphs, so
+   Hebrew needs its own pair — but importing them here would make every English player
+   download both for glyphs they never render. They are fetched once Hebrew is actually
+   chosen; see apps/web/src/HebrewFonts.tsx. */
+@import "./fx.css";
+
+:root {
+  --opg-ink: #2b2b2b;
+  --opg-ink-secondary: #555555;
+  --opg-muted: #8a8a8a;
+  --opg-paper: #fbf8f1;
+  --opg-card: #ffffff;
+  --opg-marker: #d7372b;
+  /*
+   * The same red, darkened until running text clears WCAG AA. #d7372b measures 4.43:1 on paper
+   * and 4.29:1 on the soft highlight — fine for a heading or a stamp, which need 3:1, and short
+   * of the 4.5:1 that body text needs. Rather than darken the brand red everywhere (it is also
+   * the marker ink, the check icons, the focus ring and the borders, all of which clear their
+   * own floor), text below 18.66px bold or 24px regular uses this one: 5.04:1 on paper, 4.88:1
+   * on the highlight. intent/0001-platform-mvp.md commits to WCAG 2.2 AA contrast on phones.
+   */
+  --opg-marker-text: #c73328;
+  --opg-highlight: #ffe45c;
+  --opg-highlight-soft: #fff6bf;
+  --opg-tape: rgba(255, 228, 92, 0.8);
+  --opg-grid: #e4ecf6;
+  --opg-rule-blue: #bcd6f0;
+  --opg-rule-red: #e8a3a3;
+
+  --opg-font-body: "Atkinson Hyperlegible", Verdana, system-ui, sans-serif;
+  --opg-font-marker:
+    "Permanent Marker", "Marker Felt", "Comic Sans MS", cursive;
+
+  --opg-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --opg-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --opg-dur-micro: 120ms;
+  --opg-dur-medium: 300ms;
+
+  --opg-radius-l: 40px 12px 36px 14px / 14px 36px 12px 40px;
+  --opg-radius-m: 30px 10px 26px 12px / 12px 26px 10px 30px;
+  --opg-radius-m-alt: 12px 30px 10px 26px / 26px 10px 30px 12px;
+  --opg-radius-button: 26px 10px 22px 12px / 12px 22px 10px 26px;
+}
+
+/* Hebrew has no Permanent Marker / Atkinson Hyperlegible glyphs, so the
+   `:root[lang="he"]` scope (set on <html> alongside dir="rtl") adds faces that
+   ship Hebrew and keep the same hand-drawn/legible split.
+
+   The Latin faces stay first in each stack. Fallback is per glyph, so Hebrew
+   text still lands on Heebo and Secular One, while the Latin that survives a
+   Hebrew screen — the wordmark, room codes, a player who typed their name in
+   English — keeps the typeface it was designed in. */
+:root[lang="he"] {
+  --opg-font-body:
+    "Atkinson Hyperlegible", "Heebo", "Arial Hebrew", system-ui, sans-serif;
+  --opg-font-marker:
+    "Permanent Marker", "Secular One", "Arial Hebrew", system-ui, sans-serif;
+}
+
+/* Reading-order icons mirror under RTL; a physical arrow (pointing at something on the TV)
+   never carries this attribute value, so it is untouched. Not `!important`: an inline
+   `transform` at a call site still wins the cascade over this rule. */
+[dir="rtl"] svg[data-icon="arrow-right"] {
+  transform: scaleX(-1);
+}
+
+.opg-root,
+.opg-root * {
+  box-sizing: border-box;
+}
+
+.opg-root {
+  font-family: var(--opg-font-body);
+  color: var(--opg-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * A long word breaks rather than leaving the screen. Type here is sized in pixels, so at 200%
+ * text every word doubles while the screen does not, and a word with nowhere to break — a room
+ * code, a player's name, a pack word like "thunderstorm" — otherwise runs off the right edge
+ * where nothing scrolls sideways to reach it. A broken word is awkward; an invisible one is
+ * unplayable.
+ */
+.opg-root {
+  overflow-wrap: break-word;
+}
+
+/*
+ * Nothing drawn is allowed to be wider than the space it has. Sizes here are written in
+ * pixels, so at 200% text every one of them doubles while the screen does not; a picture is
+ * the one thing that can always give way, because it has no words to reflow.
+ */
+.opg-root img,
+.opg-root svg,
+.opg-root canvas {
+  max-width: 100%;
+}
+
+.opg-marker {
+  font-family: var(--opg-font-marker);
+  font-weight: 400;
+  line-height: 1.1;
+}
+
+/* 48px paper grid for the TV surface, 32px for phones. */
+.opg-grid-tv {
+  background-color: var(--opg-paper);
+  background-image:
+    linear-gradient(var(--opg-grid) 2px, transparent 2px),
+    linear-gradient(90deg, var(--opg-grid) 2px, transparent 2px);
+  background-size: 48px 48px;
+}
+
+.opg-grid-phone {
+  background-color: var(--opg-paper);
+  background-image:
+    linear-gradient(var(--opg-grid) 2px, transparent 2px),
+    linear-gradient(90deg, var(--opg-grid) 2px, transparent 2px);
+  background-size: 32px 32px;
+}
+
+.opg-paper {
+  background-color: var(--opg-paper);
+}
+
+.opg-surface {
+  background: var(--opg-card);
+  border: 4px solid var(--opg-ink);
+}
+
+/* Visible focus for keyboard users on every interactive element. */
+.opg-root :focus-visible,
+.opg-focus:focus-visible {
+  outline: 4px solid var(--opg-marker);
+  outline-offset: 3px;
+}
+
+button.opg-reset {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* Focus ring for composite fields (e.g. the 4-box room code input). */
+.opg-code-field:focus-within {
+  outline: 4px solid var(--opg-marker);
+  outline-offset: 3px;
+}
+
+a.opg-link {
+  color: var(--opg-ink);
+  text-underline-offset: 6px;
+}
+
+a.opg-link:hover {
+  color: var(--opg-marker);
+}
+
+/* Motion. Individual translate/scale compose with inline transforms (e.g. tilt). */
+.opg-pressable {
+  transition:
+    translate var(--opg-dur-micro) var(--opg-ease-out),
+    scale var(--opg-dur-micro) var(--opg-ease-out);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .opg-pressable:not(:disabled):not([aria-disabled="true"]):hover {
+    translate: 0 -3px;
+  }
+}
+
+.opg-pressable:not(:disabled):not([aria-disabled="true"]):active {
+  translate: 0 1px;
+  scale: 0.97;
+}
+
+.opg-phase-enter {
+  animation: opg-phase-enter var(--opg-dur-medium) var(--opg-ease-out) both;
+}
+
+@keyframes opg-phase-enter {
+  from {
+    opacity: 0;
+    translate: 0 14px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+.opg-timer-urgent {
+  animation: opg-timer-pulse 1000ms var(--opg-ease-in-out) infinite;
+}
+
+@keyframes opg-timer-pulse {
+  0%,
+  100% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.08;
+  }
+}
+
+.opg-lined {
+  position: relative;
+  background-color: var(--opg-card);
+  /* Only the blue rules are a background: they run horizontally, so direction cannot affect
+     them. The red margin rule is painted by ::before below. */
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent 0,
+    transparent 37px,
+    var(--opg-rule-blue) 37px,
+    var(--opg-rule-blue) 39px
+  );
+  background-position: 0 0;
+}
+
+/*
+ * The margin rule, as an element rather than a gradient.
+ *
+ * A gradient takes an angle, not a logical direction, so as a background it stayed on the
+ * physical left in Hebrew while the text moved to the right — the index-card motif reversed,
+ * with the rule on the far side from where the eye starts reading.
+ *
+ * `inset-inline-start` resolves against this element's own direction, which is the same thing
+ * `padding-inline-start` resolves against. That pairing is the point: an earlier attempt
+ * flipped the gradient with a `[dir="rtl"] .opg-lined` selector, which keys off an ANCESTOR's
+ * direction, and the two can disagree — leaving the rule on one side and the gutter that
+ * clears it on the other, with the text running straight through it.
+ */
+.opg-lined::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 38px;
+  width: 4px;
+  background: var(--opg-rule-red);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Fades are the reduced-motion stand-in for movement, so they stay visible. */
+  .opg-motion-fade,
+  .opg-motion-fade::before,
+  .opg-motion-fade::after {
+    animation-duration: 200ms !important;
+    transition-duration: 200ms !important;
+  }
+}

@@ -1,0 +1,809 @@
+// The layout invariants, checked inside the page.
+//
+// Every rule here is meant to be true of every screen at every supported size, forever. They
+// are hard invariants, not taste: a player cannot read text that left the screen, cannot tap a
+// control another element covers, and cannot reach an action that sits past the bottom of a
+// screen that does not scroll.
+//
+// Plain browser JavaScript on purpose: layout.spec.ts injects this file into the page with
+// addScriptTag, so it runs against real layout with no bundler and no build step between what
+// is written here and what the browser runs.
+
+/**
+ * @typedef {{ minFontSize: number, minTapTarget: number }} Limits
+ *   minFontSize: smallest computed font-size a text-bearing element may use.
+ *   minTapTarget: smallest side of an interactive element's box; 0 turns the rule off.
+ * @typedef {{ rule: string, detail: string, path: string, text: string }} Violation
+ *   path: a readable path to the element. text: its own text, to identify it at a glance.
+ */
+
+/** A pixel of slack: browsers report fractional rects, and a half-pixel is not a bug. */
+const EPS = 1;
+
+const INTERACTIVE = 'button, a[href], input, textarea, select, [role="button"]';
+
+/** @param {Element} el @returns {string} */
+function pathOf(el) {
+  const parts = [];
+  let node = el;
+  while (node && node !== document.body && parts.length < 4) {
+    const testId = node.getAttribute("data-testid");
+    const id = testId ? `[data-testid=${testId}]` : "";
+    parts.unshift(`${node.tagName.toLowerCase()}${id}`);
+    node = node.parentElement;
+  }
+  return parts.join(" > ");
+}
+
+/** @param {Element} el @returns {string} */
+function textOf(el) {
+  return (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+}
+
+/** @param {string} rule @param {Element} el @param {string} detail @returns {Violation} */
+function violation(rule, el, detail) {
+  return { rule, detail, path: pathOf(el), text: textOf(el) };
+}
+
+/**
+ * `clip: rect(0, 0, 0, 0)` and `clip-path: inset(50%)` are the two standard ways to clip a
+ * label down to no area at all. Either one paints nothing, whatever its box measures.
+ *
+ * @param {CSSStyleDeclaration} style @returns {boolean}
+ */
+function clipsAwayEverything(style) {
+  const rect = /^rect\((-?[\d.]+)px,?\s*(-?[\d.]+)px,?\s*(-?[\d.]+)px,?\s*(-?[\d.]+)px\)$/.exec(
+    style.clip.trim(),
+  );
+  if (rect !== null) {
+    const [top, right, bottom, left] = rect.slice(1).map(Number);
+    return right - left <= 0 || bottom - top <= 0;
+  }
+  const inset = /^inset\(\s*([\d.]+)%/.exec(style.clipPath);
+  return inset !== null && Number(inset[1]) >= 50;
+}
+
+/**
+ * The visually-hidden idiom: a box pulled out of flow and clipped away, that a screen reader
+ * reads and nobody sees. Recognised first by the clip that hides it, because that is the part
+ * a real element cannot have by accident — and because size is the one signal zoom destroys.
+ * getBoundingClientRect reports viewport pixels, so a one-pixel label measures 2px at 200% and
+ * 4px at 400%; clientWidth and clientHeight stay in layout pixels at any zoom, which is why the
+ * fallback below asks them instead of the rect.
+ *
+ * @param {HTMLElement} el @param {CSSStyleDeclaration} style @returns {boolean}
+ */
+function screenReaderOnly(el, style) {
+  if (style.position !== "absolute" && style.position !== "fixed") return false;
+  if (clipsAwayEverything(style)) return true;
+  const clipped = style.clipPath !== "none" || (style.clip !== "auto" && style.clip !== "");
+  if (!clipped && style.overflow !== "hidden") return false;
+  return el.clientWidth <= 4 && el.clientHeight <= 4;
+}
+
+/** @param {HTMLElement} el @returns {boolean} */
+function visible(el) {
+  const style = getComputedStyle(el);
+  if (style.visibility === "hidden" || style.display === "none") return false;
+  if (Number(style.opacity) < 0.05) return false;
+  if (screenReaderOnly(el, style)) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
+/** Text this element renders itself, rather than through a child. @param {Element} el */
+function directText(el) {
+  let text = "";
+  for (const node of el.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) text += node.textContent ?? "";
+  }
+  return text.trim();
+}
+
+/** @param {HTMLElement} el @returns {boolean} */
+function carriesWords(el) {
+  return directText(el) !== "" || el.matches(INTERACTIVE);
+}
+
+/**
+ * Words and controls may not cross the left or right edge of the screen: nothing scrolls
+ * sideways to reach them. Decoration may — tilted stickers and the result burst hang past the
+ * edge on purpose — so this only judges elements that carry text or take a tap.
+ *
+ * @param {HTMLElement} el @returns {Violation | null}
+ */
+function checkHorizontal(el) {
+  if (!carriesWords(el)) return null;
+  const rect = el.getBoundingClientRect();
+  if (rect.right > window.innerWidth + EPS) {
+    return violation(
+      "offscreen-x",
+      el,
+      `right edge at ${Math.round(rect.right)}px, screen is ${window.innerWidth}px`,
+    );
+  }
+  if (rect.left < -EPS) {
+    return violation("offscreen-x", el, `left edge at ${Math.round(rect.left)}px`);
+  }
+  return null;
+}
+
+/**
+ * A box that clips and holds content wider than itself is cutting text off. Boxes that let
+ * content show through (overflow visible) are the design's own tilted stickers, not a bug.
+ *
+ * @param {HTMLElement} el @returns {Violation | null}
+ */
+/**
+ * The widest right edge of any text this element actually renders, relative to its own box. A
+ * box's scrollWidth counts everything inside it, decoration included, and this design hangs
+ * decoration past its edges on purpose — tilted stickers, a celebration burst — behind an
+ * `overflow: hidden` that exists precisely to contain them. Measuring that as clipped text
+ * reports a card as broken for doing the thing it was built to do.
+ *
+ * @param {HTMLElement} el @returns {number}
+ */
+function textRightEdge(el) {
+  const left = el.getBoundingClientRect().left;
+  let widest = 0;
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let node = walk.nextNode(); node !== null; node = walk.nextNode()) {
+    if ((node.textContent ?? "").trim() === "") continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    for (const rect of range.getClientRects()) {
+      widest = Math.max(widest, rect.right - left);
+    }
+  }
+  return widest;
+}
+
+/** @param {HTMLElement} el @returns {Violation | null} */
+function checkClipped(el) {
+  if (el.clientWidth === 0) return null;
+  const overflowX = getComputedStyle(el).overflowX;
+  if (overflowX === "visible" || overflowX === "auto" || overflowX === "scroll") return null;
+  if (el.scrollWidth <= el.clientWidth + EPS) return null;
+  if (textOf(el) === "") return null;
+  // Both sides of this comparison have to be measured the same way. Text rects and the box's
+  // own rect are viewport pixels, which double at 200% zoom; clientWidth is layout pixels,
+  // which do not. Asking whether zoomed text outruns an unzoomed box calls every wide card
+  // clipped the moment somebody zooms — and a tilted one worst of all, because a rotation
+  // widens the bounding box without moving a single word.
+  const box = el.getBoundingClientRect();
+  const textEdge = textRightEdge(el);
+  if (textEdge <= box.width + EPS) return null;
+  return violation(
+    "text-clipped",
+    el,
+    `text reaches ${Math.round(textEdge)}px in a ${Math.round(box.width)}px box`,
+  );
+}
+
+/** @param {HTMLElement} el @param {Limits} limits @returns {Violation | null} */
+function checkFontSize(el, limits) {
+  if (directText(el) === "") return null;
+  const size = Number.parseFloat(getComputedStyle(el).fontSize);
+  if (size >= limits.minFontSize - 0.5) return null;
+  return violation("text-too-small", el, `${size}px, floor is ${limits.minFontSize}px`);
+}
+
+/** @param {HTMLElement} el @param {Limits} limits @returns {Violation | null} */
+function checkTapTarget(el, limits) {
+  if (limits.minTapTarget === 0) return null;
+  const rect = el.getBoundingClientRect();
+  const side = Math.min(rect.width, rect.height);
+  if (side >= limits.minTapTarget - EPS) return null;
+  return violation(
+    "tap-target",
+    el,
+    `${Math.round(rect.width)}x${Math.round(rect.height)}px, floor is ${limits.minTapTarget}px`,
+  );
+}
+
+/** The part of an element's box that is actually on the screen. @param {DOMRect} rect */
+function visiblePart(rect) {
+  const top = Math.max(rect.top, 0);
+  const bottom = Math.min(rect.bottom, window.innerHeight);
+  const left = Math.max(rect.left, 0);
+  const right = Math.min(rect.right, window.innerWidth);
+  return { top, bottom, left, right, height: bottom - top, width: right - left };
+}
+
+/**
+ * After scrolling to it, enough of an action has to be on the screen to see and touch.
+ *
+ * Not "entirely on the screen": at 200% text a card can be taller than the phone, and a player
+ * scrolls through it the way they scroll through anything long. What makes an action
+ * unreachable is having nothing of it to tap — the failure this rule was written for, where a
+ * screen that does not scroll leaves its button below the bottom edge.
+ *
+ * @param {HTMLElement} el @returns {Violation | null}
+ */
+function checkReachable(el) {
+  const rect = el.getBoundingClientRect();
+  const seen = visiblePart(rect);
+  const enoughHigh = Math.min(44, rect.height);
+  const enoughWide = Math.min(44, rect.width);
+  if (seen.height >= enoughHigh - EPS && seen.width >= enoughWide - EPS) return null;
+  return violation(
+    "unreachable",
+    el,
+    `sits at ${Math.round(rect.top)}..${Math.round(rect.bottom)}px in a ${window.innerHeight}px screen, leaving ${Math.round(Math.max(seen.height, 0))}px of it to tap`,
+  );
+}
+
+/** Whatever is on top at a control's centre has to be that control. @param {HTMLElement} el */
+function checkCovered(el) {
+  const rect = el.getBoundingClientRect();
+  // The middle of what is on the screen, not the middle of the element: an element taller than
+  // the phone has its geometric centre somewhere off the edge, where hit-testing asks about a
+  // point the player cannot touch anyway.
+  const seen = visiblePart(rect);
+  if (seen.height <= 0 || seen.width <= 0) return null;
+  const top = document.elementFromPoint(
+    (seen.left + seen.right) / 2,
+    (seen.top + seen.bottom) / 2,
+  );
+  if (top === null) return violation("covered", el, "nothing hit-tests at its centre");
+  if (top === el || el.contains(top)) return null;
+  return violation("covered", el, `${pathOf(top)} is on top at its centre`);
+}
+
+/** @param {HTMLElement} el @param {Limits} limits @returns {Violation[]} */
+function checkInteractive(el, limits) {
+  el.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const reachable = checkReachable(el);
+  const found = [reachable ?? checkCovered(el), checkTapTarget(el, limits)];
+  return found.filter((each) => each !== null);
+}
+
+/** The TV stage's height in its own coordinates, the 1080 of the 1920x1080 the design is drawn at. */
+const STAGE_HEIGHT = 1080;
+
+/**
+ * Where the TV stage sits and how far it has been shrunk to fit, or null on a page that has no
+ * stage — a phone screen, or a stage whose class was renamed out from under this file.
+ *
+ * The scale is the whole point of measuring the stage rather than assuming it. `Stage`
+ * (packages/ui/src/layout.tsx) lays out a literal 1920x1080 box and then
+ * `transform: scale(...)`s it to fit whatever it is cast to, so every rect the browser reports
+ * inside it comes back in scaled viewport pixels. Dividing that scale back out puts a
+ * measurement in the units the design is written in, which is the only space where "past the
+ * bottom" is one number instead of one per window size.
+ *
+ * @returns {{ top: number, scale: number } | null}
+ */
+function stageFrame() {
+  const stage = document.querySelector(".opg-grid-tv");
+  if (stage === null) return null;
+  const rect = stage.getBoundingClientRect();
+  if (rect.height <= 0) return null;
+  return { top: rect.top, scale: rect.height / STAGE_HEIGHT };
+}
+
+/**
+ * The block space a container has to give its children: its own box, less border and padding.
+ *
+ * `clientHeight` already excludes the border, and reports 0 for an inline box — which is what
+ * makes it the right measure here. An inline element hands its children no block space of its
+ * own, so it is never the place a screen's height is being spent.
+ *
+ * @param {Element} el @returns {number}
+ */
+function contentHeight(el) {
+  const style = getComputedStyle(el);
+  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  return el.clientHeight - (Number.isFinite(padding) ? padding : 0);
+}
+
+/** The tallest element child of `el`, or null when it has none. @param {Element} el @returns {Element | null} */
+function tallestChild(el) {
+  let best = null;
+  let tallest = -1;
+  for (const child of Array.from(el.children)) {
+    const height = child.getBoundingClientRect().height;
+    if (height > tallest) {
+      tallest = height;
+      best = child;
+    }
+  }
+  return best;
+}
+
+/**
+ * Whether `el` STACKS its children — their heights add up — rather than taking the tallest.
+ *
+ * The two kinds of container fail differently and want different answers. A row is as tall as
+ * its tallest cell, so one box is to blame and naming it ends the search. A column adds its
+ * children up, so no single child is to blame and the useful fact is how many there are.
+ *
+ * Told apart by measurement rather than by reading `display`, which would have to enumerate
+ * every block, flex and grid case and would still have to guess at `subgrid`: a container
+ * taller than its tallest child is spending the difference on the others.
+ *
+ * @param {Element} el @returns {boolean}
+ */
+function stacks(el) {
+  const tallest = tallestChild(el);
+  if (tallest === null) return false;
+  return contentHeight(el) > tallest.getBoundingClientRect().height + EPS;
+}
+
+/**
+ * Descends from `el` to the box that actually sets its height, through each container that
+ * takes its tallest child's height instead of adding its children up.
+ *
+ * @param {Element} el @returns {Element}
+ */
+function heightSetter(el) {
+  let node = el;
+  for (let depth = 0; depth < 20; depth += 1) {
+    if (stacks(node)) break;
+    const child = tallestChild(node);
+    if (child === null) break;
+    node = child;
+  }
+  return node;
+}
+
+/**
+ * Why the element sits that low: the nearest container above it that is stacking several
+ * things, how many it is stacking, and the box that sets the tallest one's height.
+ *
+ * This is the vertical half of what `blameForWidth` does sideways, and it answers the question
+ * the rule otherwise leaves open. `offstage-y` names the element that crossed the edge, which
+ * is rarely the element at fault: the table row that fell off the bottom is the same height as
+ * the seven above it, and all eight are that tall because one cell in each wrapped to a second
+ * line. The element below the edge is the symptom; the stack and that cell are the lead.
+ *
+ * @param {Element} el @param {{ top: number, scale: number }} frame @returns {string | null}
+ */
+function heightBlame(el, frame) {
+  let node = el.parentElement;
+  for (let depth = 0; node !== null && depth < 20; depth += 1) {
+    // The stage stacks the screen itself, which is true and no help; stop before saying it.
+    if (node.classList.contains("opg-grid-tv")) return null;
+    if (stacks(node)) return blameForStack(node, frame);
+    node = node.parentElement;
+  }
+  return null;
+}
+
+/** @param {Element} stack @param {{ top: number, scale: number }} frame @returns {string | null} */
+function blameForStack(stack, frame) {
+  const tallest = tallestChild(stack);
+  if (tallest === null) return null;
+  const inStageUnits = (el) => Math.round(el.getBoundingClientRect().height / frame.scale);
+  const stacked = `${pathOf(stack)} stacks ${stack.children.length} items, tallest ${inStageUnits(tallest)}px`;
+  const setter = heightSetter(tallest);
+  if (setter === tallest) return stacked;
+  const text = textOf(setter);
+  const named = `${pathOf(setter)}${text === "" ? "" : ` — "${text}"`}`;
+  return `${stacked}, set by ${named} at ${inStageUnits(setter)}px`;
+}
+
+/**
+ * The TV stage does not scroll and nobody can touch it. It is a fixed 1920x1080 box under
+ * `overflow: hidden`, cast to a screen across the room, so a word below its bottom edge is not
+ * awkward to reach the way the bottom of a long phone column is — it is simply not there, and
+ * the room never finds out it was written. The phone rules have no counterpart to this one
+ * because a phone scrolls; checkReachable is the nearest thing, and it only ever looks at
+ * controls, of which the TV has almost none.
+ *
+ * Like checkHorizontal, this judges only elements that carry words or take a tap. The design
+ * hangs decoration past its edges on purpose — tilted stickers, the result burst — and a rule
+ * that counted those would report the stage for doing the thing it was built to do.
+ *
+ * @param {HTMLElement} el @param {{ top: number, scale: number }} frame @returns {Violation | null}
+ */
+function checkBelowStage(el, frame) {
+  if (!carriesWords(el)) return null;
+  const rect = el.getBoundingClientRect();
+  const bottom = (rect.bottom - frame.top) / frame.scale;
+  if (bottom <= STAGE_HEIGHT + EPS) return null;
+  // Partly cut and entirely gone are the same failure at two different sizes, and saying which
+  // is what tells somebody how bad it is: a clipped last line still shows that there was a
+  // line, where an element wholly below the edge leaves nothing on the stage to hint at it.
+  const top = (rect.top - frame.top) / frame.scale;
+  const detail =
+    top >= STAGE_HEIGHT - EPS
+      ? `entirely below the stage: starts ${Math.round(top - STAGE_HEIGHT)}px past its ${STAGE_HEIGHT}px bottom edge`
+      : `cut off by the stage: ${Math.round(bottom - STAGE_HEIGHT)}px of it is below the ${STAGE_HEIGHT}px bottom edge`;
+  const blame = heightBlame(el, frame);
+  return violation("offstage-y", el, blame === null ? detail : `${detail}; ${blame}`);
+}
+
+/**
+ * The stage rule over a whole TV screen. Kept out of collectViolations and exported on its own
+ * because it is the one rule here that is false of a phone: a phone column that runs long
+ * scrolls, and calling that a violation would fail every list in the app.
+ *
+ * A page with no stage is reported rather than passed. This rule can only be as good as its
+ * one selector, and a rule that answers "clean" when it found nothing to measure is the shape
+ * of every check that quietly stops checking.
+ *
+ * @returns {Violation[]}
+ */
+function collectStageViolations() {
+  const frame = stageFrame();
+  if (frame === null) {
+    return [
+      {
+        rule: "offstage-y",
+        detail: "no .opg-grid-tv stage on this page, so the rule measured nothing",
+        path: "html",
+        text: "",
+      },
+    ];
+  }
+  const elements = Array.from(document.body.querySelectorAll("*")).filter(visible);
+  return elements.map((el) => checkBelowStage(el, frame)).filter((each) => each !== null);
+}
+
+/**
+ * The child whose clipping makes the page stop scrolling sideways, or null if none does.
+ *
+ * Measured by clipping rather than by reading rectangles, because the interesting case is the
+ * one rectangles cannot see: a rotated card, a box-shadow, a pseudo-element or a fixed-size
+ * burst paints outside a box that is itself exactly where it should be. `getBoundingClientRect`
+ * reports the box, not the ink, so `offscreen-x` stays silent and the only symptom is the page
+ * width. Clipping asks the question directly — does the overflow go away without this subtree?
+ *
+ * @param {Element} parent @param {number} limit @returns {Element | null}
+ */
+function clippingCulprit(parent, limit) {
+  // Deliberately not filtered by `visible`: a wrapper whose only child is absolutely
+  // positioned has no height of its own, and skipping it strands the walk one level above
+  // the element actually doing the damage. Clipping is its own filter — an element that is
+  // not rendered cannot be what settles the overflow.
+  for (const child of Array.from(parent.children)) {
+    const before = child.style.overflow;
+    child.style.overflow = "hidden";
+    const settled = document.documentElement.scrollWidth <= limit;
+    child.style.overflow = before;
+    if (settled) return child;
+  }
+  return null;
+}
+
+/**
+ * How far outside the screen a box reaches, on whichever side it leaves by. Both sides are
+ * measured, because which one overflows depends on the writing direction: the same design
+ * hangs off the right in English and off the left in Hebrew.
+ *
+ * @param {DOMRect} rect @param {number} limit @returns {number}
+ */
+function overshoot(rect, limit) {
+  return Math.max(rect.right - limit, -EPS - rect.left);
+}
+
+/**
+ * The child of `parent` reaching furthest outside the screen, or null if none does.
+ *
+ * @param {Element} parent @param {number} limit @returns {Element | null}
+ */
+function childFurthestOutside(parent, limit) {
+  let worst = null;
+  let furthest = 0;
+  for (const child of Array.from(parent.children)) {
+    const out = overshoot(child.getBoundingClientRect(), limit);
+    if (out > furthest) {
+      furthest = out;
+      worst = child;
+    }
+  }
+  return worst;
+}
+
+/**
+ * Walks down to the element responsible for the overflow.
+ *
+ * The descent finds the deepest subtree whose clipping settles the page — which is the
+ * culprit's PARENT, not the culprit: `overflow: hidden` clips an element's children and never
+ * itself, so the offending box can never be identified by clipping it. The last step therefore
+ * looks inside that parent for the child actually crossing the edge.
+ *
+ * When no child crosses it, the parent is the answer: the overflow is paint with no box behind
+ * it — a pseudo-element, a shadow — and the element that owns the paint is as close as this
+ * can get.
+ *
+ * @param {number} limit @returns {Element | null}
+ */
+function blameForWidth(limit) {
+  let node = document.body;
+  for (let depth = 0; depth < 20; depth += 1) {
+    const child = clippingCulprit(node, limit);
+    if (!child) break;
+    node = child;
+  }
+  if (node === document.body) return null;
+  return childFurthestOutside(node, limit) ?? node;
+}
+
+/**
+ * A screen that scrolls sideways is broken outright.
+ *
+ * The rule used to report `html` and the two widths, which says that something overflowed but
+ * not what — fine when `offscreen-x` fires on the same element and names it, useless in the
+ * paint-overflow case where this rule fires alone. It now names the subtree responsible.
+ *
+ * One limit worth knowing, measured rather than assumed: `scrollWidth` only grows toward the
+ * INLINE-END side. A box 300px past the left edge of an LTR page, or past the right edge of an
+ * RTL one, leaves `scrollWidth` at the viewport width — the browser clips it instead of making
+ * it scrollable. So this rule cannot see inline-start overflow in either direction. Words that
+ * go that way are still caught, by `offscreen-x`'s `rect.left < -EPS` branch; what escapes both
+ * is wordless decoration hanging off the inline-start edge, which is clipped and therefore
+ * invisible rather than unreachable.
+ *
+ * @returns {Violation[]}
+ */
+function checkPageWidth() {
+  const doc = document.documentElement;
+  const limit = window.innerWidth + EPS;
+  if (doc.scrollWidth <= limit) return [];
+  const width = `${doc.scrollWidth}px of page in a ${window.innerWidth}px screen`;
+  const culprit = blameForWidth(limit);
+  if (!culprit) {
+    return [{ rule: "page-scrolls-sideways", detail: `${width}; no single subtree accounts for it`, path: "html", text: "" }];
+  }
+  return [violation("page-scrolls-sideways", culprit, `${width}; clipping this element settles it`)];
+}
+
+/** @param {Limits} limits @returns {Violation[]} */
+function collectViolations(limits) {
+  const elements = Array.from(document.body.querySelectorAll("*")).filter(visible);
+  const found = [...checkPageWidth()];
+  for (const el of elements) {
+    found.push(checkHorizontal(el), checkClipped(el), checkFontSize(el, limits));
+  }
+  for (const el of elements) {
+    if (el.matches(INTERACTIVE)) found.push(...checkInteractive(el, limits));
+  }
+  window.scrollTo(0, 0);
+  return found.filter((each) => each !== null);
+}
+
+window.opgLayout = { collectViolations };
+
+// Its own surface rather than another entry on opgLayout, for a dull reason worth writing down
+// so nobody folds it back in: every spec in this folder declares `window.opgLayout` in its own
+// `declare global`, those declarations merge into one Window, and TypeScript requires them to
+// agree exactly — so a member added here has to be added to each of them in lockstep, forever,
+// including the specs that never call it. A second global costs nothing, and the file is
+// already split this way: opgA11y below is a surface of its own for its own one caller.
+window.opgStage = { collectStageViolations };
+
+// --- Accessibility invariants -----------------------------------------------------------
+//
+// These are checked separately from collectViolations, by a11y.spec.ts, at fewer sizes: they
+// do not depend on viewport width the way layout does, so running them at every phone size
+// would just repeat the same answer for more cost.
+
+/**
+ * Every id in aria-labelledby, joined. Empty if the attribute is absent, points at nothing, or
+ * every target is itself empty. @param {Element} el @returns {string}
+ */
+function resolveLabelledBy(el) {
+  const ids = (el.getAttribute("aria-labelledby") ?? "").trim();
+  if (ids === "") return "";
+  return ids
+    .split(/\s+/)
+    .map((id) => document.getElementById(id))
+    .filter((node) => node !== null)
+    .map((node) => (node.textContent ?? "").trim())
+    .filter((text) => text !== "")
+    .join(" ");
+}
+
+/** A <label for=id> naming el, or el's nearest wrapping <label>. @param {Element} el */
+function resolveAssociatedLabel(el) {
+  if (el.id) {
+    const target = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+    const text = (target?.textContent ?? "").trim();
+    if (text !== "") return text;
+  }
+  const wrapping = el.closest("label");
+  return (wrapping?.textContent ?? "").trim();
+}
+
+/**
+ * A form field's own name: an associated <label>, or a button-like input's value — the input
+ * itself never has text content to fall back on. @param {Element} el @returns {string}
+ */
+function fieldNameOf(el) {
+  const associated = resolveAssociatedLabel(el);
+  if (associated !== "") return associated;
+  const type = (el.getAttribute("type") ?? "text").toLowerCase();
+  if (el.tagName.toLowerCase() === "input" && ["button", "submit", "reset"].includes(type)) {
+    return (el.getAttribute("value") ?? "").trim();
+  }
+  return "";
+}
+
+/**
+ * The name a screen reader would announce for a control: aria-label, aria-labelledby, an
+ * associated <label> for a form field (or its value, for a button-like input), else the
+ * control's own text content. Empty when none of those give it one.
+ *
+ * @param {Element} el @returns {string}
+ */
+function accessibleNameOf(el) {
+  const ariaLabel = (el.getAttribute("aria-label") ?? "").trim();
+  if (ariaLabel !== "") return ariaLabel;
+  const labelledBy = resolveLabelledBy(el);
+  if (labelledBy !== "") return labelledBy;
+  const tag = el.tagName.toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return fieldNameOf(el);
+  return (el.textContent ?? "").trim();
+}
+
+/**
+ * A control with no accessible name is invisible to a screen reader: an icon-only button that
+ * relies on its shape to be understood by anyone not looking at it. This is a rule, not a
+ * preference, because there is no visual signal that catches the gap — the button looks fine.
+ *
+ * @param {HTMLElement} el @returns {Violation | null}
+ */
+function checkAccessibleName(el) {
+  if (accessibleNameOf(el) !== "") return null;
+  return violation(
+    "no-accessible-name",
+    el,
+    "no text, aria-label, aria-labelledby or associated <label>",
+  );
+}
+
+/** @returns {Violation[]} */
+function collectNameViolations() {
+  const elements = Array.from(document.body.querySelectorAll("*")).filter(visible);
+  const found = [];
+  for (const el of elements) {
+    if (!el.matches(INTERACTIVE)) continue;
+    const missing = checkAccessibleName(el);
+    if (missing) found.push(missing);
+  }
+  return found;
+}
+
+/** @typedef {{ r: number, g: number, b: number, a: number }} Rgba */
+
+/** @param {string} raw @returns {Rgba | null} */
+function parseColor(raw) {
+  const match = raw.match(/rgba?\(([^)]+)\)/);
+  if (!match) return null;
+  const parts = match[1].split(",").map((part) => Number.parseFloat(part));
+  const [r, g, b, a = 1] = parts;
+  if ([r, g, b, a].some((n) => Number.isNaN(n))) return null;
+  return { r, g, b, a };
+}
+
+/** @param {Rgba} fg @param {{r:number,g:number,b:number}} bg @returns {{r:number,g:number,b:number}} */
+function compositeOver(fg, bg) {
+  return {
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a),
+  };
+}
+
+/**
+ * The opaque colour actually painted behind an element, found by walking up to the nearest
+ * ancestor (self included) that paints anything, and compositing through any translucent
+ * layers behind it. Returns null when that nearest painted layer is an image or gradient (its
+ * pixels are not one colour) or when nothing opaque is ever found — the caller must skip
+ * rather than guess a background contrast cannot be checked against.
+ *
+ * @param {Element | null} el @returns {{r:number,g:number,b:number} | null}
+ */
+function resolveBackgroundColor(el) {
+  if (el === null) return null;
+  const style = getComputedStyle(el);
+  const hasImage = style.backgroundImage !== "none";
+  const bg = parseColor(style.backgroundColor);
+  const hasColor = bg !== null && bg.a > 0;
+  if (!hasImage && !hasColor) return resolveBackgroundColor(el.parentElement);
+  if (hasImage) return null;
+  if (bg.a >= 0.999) return { r: bg.r, g: bg.g, b: bg.b };
+  const behind = resolveBackgroundColor(el.parentElement);
+  if (behind === null) return null;
+  return compositeOver(bg, behind);
+}
+
+/** @param {number} channel 0-255 @returns {number} */
+function linearChannel(channel) {
+  const c = channel / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+/** @param {{r:number,g:number,b:number}} color @returns {number} */
+function relativeLuminance(color) {
+  return (
+    0.2126 * linearChannel(color.r) +
+    0.7152 * linearChannel(color.g) +
+    0.0722 * linearChannel(color.b)
+  );
+}
+
+/** @param {{r:number,g:number,b:number}} a @param {{r:number,g:number,b:number}} b @returns {number} */
+function contrastRatio(a, b) {
+  const l1 = relativeLuminance(a);
+  const l2 = relativeLuminance(b);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/**
+ * WCAG's "large text": 24px regular weight, or 18.66px (14pt) at bold (700) or heavier. Large
+ * text needs less contrast to read, because its strokes are already thick enough to survive it.
+ *
+ * @param {number} fontSizePx @param {number} fontWeight @returns {boolean}
+ */
+function isLargeText(fontSizePx, fontWeight) {
+  if (fontSizePx >= 24) return true;
+  return fontWeight >= 700 && fontSizePx >= 18.66;
+}
+
+/**
+ * WCAG contrast for one element: 4.5:1 for body text, 3:1 for large text, against the colour
+ * actually painted behind it. The design already reasons about this — Doodle Bluff's marker
+ * inks were darkened until they cleared 3:1 on paper — but nothing before this enforced it, so
+ * a future ink or theme could quietly slip under the floor with nothing to catch it.
+ *
+ * Returns null for an element the rule does not apply to (no text of its own, or a colour
+ * format it cannot parse); otherwise an object saying whether the background could be resolved
+ * at all, and the violation, if any, once it could.
+ *
+ * @param {HTMLElement} el @returns {{ skipped: boolean, violation: Violation | null } | null}
+ */
+function evaluateContrast(el) {
+  if (directText(el) === "") return null;
+  const style = getComputedStyle(el);
+  const fg = parseColor(style.color);
+  if (fg === null) return null;
+  const bg = resolveBackgroundColor(el);
+  if (bg === null) return { skipped: true, violation: null };
+  const size = Number.parseFloat(style.fontSize);
+  const weight = Number.parseFloat(style.fontWeight) || 400;
+  const large = isLargeText(size, weight);
+  const threshold = large ? 3 : 4.5;
+  const fgColor = fg.a >= 0.999 ? fg : compositeOver(fg, bg);
+  const ratio = contrastRatio(fgColor, bg);
+  if (ratio + 0.005 >= threshold) return { skipped: false, violation: null };
+  return {
+    skipped: false,
+    violation: violation(
+      "low-contrast",
+      el,
+      `${ratio.toFixed(2)}:1, floor is ${threshold}:1 for ${large ? "large" : "body"} text`,
+    ),
+  };
+}
+
+/**
+ * Contrast can only be judged where the background resolves to one opaque colour; elsewhere
+ * this skips rather than guesses. `skipped` is returned alongside `checked` so a caller can
+ * assert skipping is not the whole page — a rule that silently skips everything is not a rule.
+ *
+ * @returns {{ violations: Violation[], checked: number, skipped: number }}
+ */
+function collectContrastViolations() {
+  const elements = Array.from(document.body.querySelectorAll("*")).filter(visible);
+  const violations = [];
+  let checked = 0;
+  let skipped = 0;
+  for (const el of elements) {
+    const result = evaluateContrast(el);
+    if (result === null) continue;
+    if (result.skipped) {
+      skipped += 1;
+      continue;
+    }
+    checked += 1;
+    if (result.violation) violations.push(result.violation);
+  }
+  return { violations, checked, skipped };
+}
+
+window.opgA11y = { collectNameViolations, collectContrastViolations };

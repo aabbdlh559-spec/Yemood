@@ -1,0 +1,30 @@
+import type { Dictionary } from "../dictionary";
+
+export const common: Dictionary["common"] = {
+  languageLabel: "שפה",
+  documentTitle: "Yemood: משחקי מסיבה לטלוויזיה ולטלפונים",
+  someone: "מישהו",
+  errorRoomFull: "החדר מלא.",
+  errorRoomLocked: "החדר נעול.",
+  errorNameTaken: "השם הזה תפוס. נסו שם אחר.",
+  errorNameInvalid: "שם חייב להכיל \u20661–{max}\u2069 תווים.",
+  errorNotEnoughPlayers: "עדיין אין מספיק שחקנים.",
+  errorInvalidAction: "זה לא עבד. בדקו את המשחק והחפיסות.",
+  errorGeneric: "משהו השתבש. נסו שוב.",
+  errorNoLanguagePacks: "המשחק הזה בשפה אחרת. בחרו משחק בשפה של החדר, או פתחו חדר בשפה שלו.",
+  listAndTwo: "{a} ו{b}",
+  listAndLast: "{list} ו{last}",
+  listOrTwo: "{a} או {b}",
+  listOrLast: "{list} או {last}",
+  place: {
+    first: "במקום הראשון",
+    second: "במקום השני",
+    third: "במקום השלישי",
+    fourth: "במקום הרביעי",
+    fifth: "במקום החמישי",
+    sixth: "במקום השישי",
+    seventh: "במקום השביעי",
+    eighth: "במקום השמיני",
+    other: "במקום ה-{rank}",
+  },
+};

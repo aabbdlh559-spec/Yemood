@@ -1,0 +1,68 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "openpartygames",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    { "pattern": "openpartygames.org", "custom_domain": true },
+    { "pattern": "www.openpartygames.org", "custom_domain": true }
+  ],
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // Everything but the hashed bundles and the sounds goes through the Worker first, so it
+    // can turn the SPA fallback into a 404 for file paths that don't exist (see routes.ts).
+    "run_worker_first": ["/*", "!/assets/*", "!/audio/*"]
+  },
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openpartygames",
+      "database_id": "f8d09c9b-6fe0-41c6-b48e-c0e2833fd9b9",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "DAILY_ROOM_CAP": "150"
+  },
+  // Cloudflare rate-limit bindings. The code treats them as optional so the
+  // Worker still runs (locally) when they are missing.
+  "ratelimits": [
+    { "name": "CREATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "JOIN_LIMITER", "namespace_id": "1002", "simple": { "limit": 60, "period": 60 } }
+  ],
+  // e2e: same bindings as production, but the browser suite runs several specs
+  // in parallel from one machine (one IP), which the production CREATE_LIMITER
+  // ceiling can't tell apart from an abusive client. Environments don't inherit
+  // ratelimits/durable_objects/d1_databases/vars, so this repeats them verbatim
+  // and only raises the limits. Never used outside e2e/browser (see server.ts).
+  "env": {
+    "e2e": {
+      "durable_objects": {
+        "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "openpartygames",
+          "database_id": "f8d09c9b-6fe0-41c6-b48e-c0e2833fd9b9",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "vars": {
+        "DAILY_ROOM_CAP": "150"
+      },
+      "ratelimits": [
+        { "name": "CREATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 1000, "period": 60 } },
+        { "name": "JOIN_LIMITER", "namespace_id": "1002", "simple": { "limit": 1000, "period": 60 } }
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+import type { Dictionary } from "../dictionary";
+
+export const results: Dictionary["results"] = {
+  gameOver: "המשחק נגמר",
+  points: "{score} נקודות",
+  // TODO: a native speaker should check this phrasing.
+  gameEndedEarly: "המשחק הסתיים מוקדם, בהחלטת {vip}",
+  youEndedGameEarly: "סיימתם את המשחק מוקדם",
+  waitingForFinalScores: "מחכים לניקוד הסופי",
+  finalScores: "ניקוד סופי",
+  newBadge: "חדש!",
+  almostTime: "עוד רגע",
+  awardsComing: "הפרסים בדרך…",
+  gotAward: "קיבלתם פרס!",
+  wrapBanner: "זהו זה!",
+  crownGoesTo: "והכתר עובר אל…",
+  crownDecided: "הכתר נקבע",
+  crownAnnounce: "הכתר נקבע. {crownLine}",
+  awardAnnounce: "פרס {title} הולך ל{names}.",
+  youWinCrown: "זכיתם בכתר!",
+  crownWins: "{name} זוכה בכתר!",
+  crownShares: "{names} חולקים בכתר!",
+  finishedPlace: "סיימתם {place}",
+  finishedPlaceWithScore: "סיימתם {place} עם {score}",
+  thirdPlaceBang: "מקום שלישי!",
+  secondPlaceBang: "מקום שני!",
+  thirdPlaceLabel: "מקום שלישי",
+  secondPlaceLabel: "מקום שני",
+  picksNextGame: "— בחירת המשחק הבא מהטלפון",
+  waitingOnVip: "מחכים ל{vip} לבחירת המשחק הבא",
+};

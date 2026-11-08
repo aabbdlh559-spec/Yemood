@@ -1,0 +1,495 @@
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { MutableRefObject } from "react";
+import type { ServerClock } from "@opg/ui";
+import type { Doodle, Stroke } from "@opg/sdk";
+import { GAP_MS_CAP, MAX_INK_INDEX, STROKE_MS_CAP } from "@opg/sdk";
+import { MAX_MESSAGE_LENGTH, parseClientMessage } from "@opg/protocol";
+import { LocaleProvider } from "@opg/i18n";
+import { MAX_POINTS_PER_CHUNK, type DoodleAction, type DoodlePlayerView } from "../state";
+import type { SentCursors } from "./PhoneDraw";
+import {
+  commitDrawingChange,
+  PhoneDraw,
+  pendingChunks,
+  mirrorScope,
+  readMirror,
+  restoreMirror,
+  resyncCursor,
+  SQUIGGLE_DOODLE,
+  storageKey,
+} from "./PhoneDraw";
+
+function sentCursorsRef(initial: SentCursors = {}): MutableRefObject<SentCursors> {
+  return { current: initial };
+}
+
+afterEach(() => {
+  cleanup();
+  window.sessionStorage.clear();
+  window.localStorage.clear();
+});
+
+const CLOCK: ServerClock = { now: () => 1000 };
+const FIRST_PROMPT = "a cat riding a skateboard";
+const GAME_START = 5000;
+
+function stroke(points: number): Stroke {
+  const p: number[] = [0, 0];
+  for (let i = 1; i < points; i += 1) p.push(1, 1);
+  return { c: 0, d: 10, g: 0, p };
+}
+
+function baseView(overrides: Partial<DoodlePlayerView> = {}): DoodlePlayerView {
+  return {
+    phase: "draw",
+    playerCount: 4,
+    myPrompts: [
+      { drawingId: "p1:0", prompt: "a cat riding a skateboard" },
+      { drawingId: "p1:1", prompt: "a dog on a scooter" },
+    ],
+    myStrokeCounts: {},
+    myDone: {},
+    drawnCount: 0,
+    roundNumber: 0,
+    roundCount: 0,
+    currentDrawingId: null,
+    isArtist: false,
+    doodle: null,
+    myTitle: null,
+    titleError: null,
+    titledCount: 0,
+    options: null,
+    myVote: null,
+    votedCount: 0,
+    reveal: null,
+    myPoints: null,
+    totals: {},
+    ...overrides,
+  };
+}
+
+/** A player id at its longest: the room mints UUIDs, and a drawing id is that plus ":0" or ":1". */
+const DRAWING_ID = "7d444840-9dc0-11d1-b245-5ffdce74fad2:0";
+
+describe("pendingChunks", () => {
+  it("returns nothing when there are no strokes past the cursor", () => {
+    expect(pendingChunks([stroke(2), stroke(2)], 2, DRAWING_ID)).toEqual([]);
+  });
+
+  it("keeps strokes under the per-chunk point cap in one chunk", () => {
+    const strokes = [stroke(2), stroke(2)];
+    expect(pendingChunks(strokes, 0, DRAWING_ID)).toEqual([strokes]);
+  });
+
+  it("splits into a new chunk once the point cap would be exceeded", () => {
+    const big = stroke(300);
+    const strokes = [big, big];
+    const chunks = pendingChunks(strokes, 0, DRAWING_ID);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toEqual([big]);
+    expect(chunks[1]).toEqual([big]);
+  });
+
+  it("respects the from cursor", () => {
+    const strokes = [stroke(2), stroke(2), stroke(2)];
+    expect(pendingChunks(strokes, 1, DRAWING_ID)).toEqual([[strokes[1], strokes[2]]]);
+  });
+});
+
+/** A stroke that zig-zags the full width of the grid: every delta is 1023 or -1023, so every point
+ * costs the most characters a point can cost. */
+function denseStroke(points: number): Stroke {
+  const p: number[] = [1023, 1023];
+  for (let i = 1; i < points; i += 1) p.push(i % 2 === 1 ? -1023 : 1023, i % 2 === 1 ? -1023 : 1023);
+  return { c: MAX_INK_INDEX, d: STROKE_MS_CAP, g: GAP_MS_CAP, p };
+}
+
+function pointCount(strokes: readonly Stroke[]): number {
+  return strokes.reduce((sum, s) => sum + s.p.length / 2, 0);
+}
+
+/** The frame the socket builds for a "strokes" action: `useRoomSocket.send` stringifies exactly this. */
+function strokesFrame(from: number, strokes: Stroke[]): string {
+  return JSON.stringify({ t: "game-action", action: { type: "strokes", drawingId: DRAWING_ID, from, strokes } });
+}
+
+describe("pendingChunks frame sizing", () => {
+  it("splits a dense 400-point run into frames parseClientMessage keeps whole", () => {
+    const strokes = [denseStroke(128), denseStroke(128), denseStroke(128), denseStroke(16)];
+    expect(pointCount(strokes)).toBe(400);
+    const chunks = pendingChunks(strokes, 0, DRAWING_ID);
+    expect(chunks.length).toBeGreaterThan(1);
+    let from = 0;
+    for (const chunk of chunks) {
+      const frame = strokesFrame(from, chunk);
+      expect(frame.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+      expect(parseClientMessage(frame)).not.toBeNull();
+      from += chunk.length;
+    }
+    expect(chunks.flat()).toEqual(strokes);
+  });
+
+  it("splits on the rules' point bound when the frame would hold more", () => {
+    const strokes = [stroke(128), stroke(128), stroke(128), stroke(128)];
+    expect(strokesFrame(0, strokes).length).toBeLessThan(MAX_MESSAGE_LENGTH);
+    const chunks = pendingChunks(strokes, 0, DRAWING_ID);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) expect(pointCount(chunk)).toBeLessThanOrEqual(MAX_POINTS_PER_CHUNK);
+    expect(chunks.flat()).toEqual(strokes);
+  });
+});
+
+function renderDraw(
+  view: DoodlePlayerView,
+  send: (action: DoodleAction) => void = vi.fn<(action: DoodleAction) => void>(),
+  startedAt: number | null = GAME_START,
+) {
+  return render(
+    <LocaleProvider>
+      <PhoneDraw view={view} roomCode="BKTZ" clock={CLOCK} send={send} startedAt={startedAt} />
+    </LocaleProvider>,
+  );
+}
+
+/** Every drawing renders its own squiggle button; only the active one is on screen. */
+function clickSquiggle(): void {
+  const [squiggle] = screen.getAllByText("Can't draw? Send a squiggle");
+  if (squiggle === undefined) throw new Error("expected a squiggle button");
+  fireEvent.click(squiggle);
+}
+
+describe("PhoneDraw", () => {
+  it("shows the progress label and the active prompt", () => {
+    renderDraw(baseView());
+    expect(screen.getByText("Drawing 1 of 2")).toBeTruthy();
+    expect(screen.getByText("Draw this — no words: a cat riding a skateboard")).toBeTruthy();
+  });
+
+  it("switches to the second prompt on Next drawing", () => {
+    renderDraw(baseView());
+    fireEvent.click(screen.getByText("Next drawing"));
+    expect(screen.getByText("Drawing 2 of 2")).toBeTruthy();
+    expect(screen.getByText("Draw this — no words: a dog on a scooter")).toBeTruthy();
+  });
+
+  it("the squiggle button submits a valid drawing and marks it done", () => {
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView(), send);
+    clickSquiggle();
+    const strokeCalls = send.mock.calls.filter(([action]) => action.type === "strokes");
+    expect(strokeCalls.length).toBeGreaterThan(0);
+    expect(strokeCalls[0]?.[0]).toMatchObject({ type: "strokes", drawingId: "p1:0", from: 0 });
+    expect(send).toHaveBeenCalledWith({ type: "doodle-done", drawingId: "p1:0" });
+  });
+
+  it("disables the squiggle button once that drawing is done", () => {
+    renderDraw(baseView({ myDone: { "p1:0": true } }));
+    const [squiggle] = screen.getAllByText("Can't draw? Send a squiggle");
+    expect(squiggle?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("stops taking ink once that drawing is done, since the room refuses it", () => {
+    const { container } = renderDraw(baseView({ myDone: { "p1:0": true } }));
+    const [canvas] = container.querySelectorAll("canvas");
+    expect(canvas?.closest("[inert]")).not.toBeNull();
+  });
+
+  it("keeps the pad live while the drawing is not done", () => {
+    const { container } = renderDraw(baseView());
+    const [canvas] = container.querySelectorAll("canvas");
+    expect(canvas?.closest("[inert]")).toBeNull();
+  });
+
+  it("the squiggle replaces what was already drawn rather than keeping part of it", () => {
+    window.sessionStorage.setItem(
+      storageKey(mirrorScope("BKTZ", FIRST_PROMPT, GAME_START), "p1:0"),
+      JSON.stringify({ v: 1, s: [stroke(2), stroke(2), stroke(2)] }),
+    );
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView({ myStrokeCounts: { "p1:0": 3 } }), send);
+    clickSquiggle();
+    const actions = send.mock.calls.map(([action]) => action);
+    expect(actions).toEqual([
+      { type: "truncate", drawingId: "p1:0", from: 3, to: 0 },
+      { type: "strokes", drawingId: "p1:0", from: 0, strokes: SQUIGGLE_DOODLE.s },
+      { type: "doodle-done", drawingId: "p1:0" },
+    ]);
+  });
+
+  it("the squiggle replaces the room's strokes even when this phone lost its mirror", () => {
+    // A rejoin from another phone: the room holds 3 strokes, this pad has none of them.
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView({ myStrokeCounts: { "p1:0": 3 } }), send);
+    clickSquiggle();
+    const actions = send.mock.calls.map(([action]) => action);
+    expect(actions).toEqual([
+      { type: "truncate", drawingId: "p1:0", from: 3, to: 0 },
+      { type: "strokes", drawingId: "p1:0", from: 0, strokes: SQUIGGLE_DOODLE.s },
+      { type: "doodle-done", drawingId: "p1:0" },
+    ]);
+  });
+
+  it("shows a waiting state when there are no prompts yet", () => {
+    renderDraw(baseView({ myPrompts: [] }));
+    expect(screen.getByText("Waiting on your prompts…")).toBeTruthy();
+  });
+
+  it("the done button submits doodle-done once, and stays disabled once done", () => {
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView(), send);
+    const [doneButton] = screen.getAllByText("I'm done with this one");
+    if (doneButton === undefined) throw new Error("expected a done button");
+    fireEvent.click(doneButton);
+    expect(send).toHaveBeenCalledWith({ type: "doodle-done", drawingId: "p1:0" });
+  });
+
+  it("renders in Hebrew when the locale is set", () => {
+    window.localStorage.setItem("opg:locale", "he");
+    renderDraw(baseView());
+    expect(screen.getByText("ציור 1 מתוך 2")).toBeTruthy();
+    expect(screen.getByText("ציירו את זה — בלי מילים: a cat riding a skateboard")).toBeTruthy();
+  });
+});
+
+describe("PhoneDraw in a second game of the same room", () => {
+  it("does not bring back the last game's stroke for the same player and slot", () => {
+    // The previous game's mirror: same room, same drawing id, a different prompt.
+    window.sessionStorage.setItem(
+      storageKey(mirrorScope("BKTZ", "a whale on a bicycle", GAME_START), "p1:0"),
+      JSON.stringify({ v: 1, s: [stroke(2)] }),
+    );
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView(), send);
+    expect(screen.getByText("Your drawing for a cat riding a skateboard: 0 strokes so far")).toBeTruthy();
+    expect(send.mock.calls.filter(([action]) => action.type === "strokes")).toHaveLength(0);
+  });
+});
+
+describe("PhoneDraw when a later game brings the same prompt back", () => {
+  const MIRROR = JSON.stringify({ v: 1, s: [stroke(2)] });
+
+  it("does not restore the earlier game's stroke for the same player, slot and prompt", () => {
+    window.sessionStorage.setItem(storageKey(mirrorScope("BKTZ", FIRST_PROMPT, GAME_START), "p1:0"), MIRROR);
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView(), send, GAME_START + 600_000);
+    expect(screen.getByText(`Your drawing for ${FIRST_PROMPT}: 0 strokes so far`)).toBeTruthy();
+    expect(send.mock.calls.filter(([action]) => action.type === "strokes")).toHaveLength(0);
+  });
+
+  it("still restores it within the same game, across a reload", () => {
+    window.sessionStorage.setItem(storageKey(mirrorScope("BKTZ", FIRST_PROMPT, GAME_START), "p1:0"), MIRROR);
+    renderDraw(baseView(), vi.fn<(action: DoodleAction) => void>(), GAME_START);
+    expect(screen.getByText(`Your drawing for ${FIRST_PROMPT}: 1 stroke so far`)).toBeTruthy();
+  });
+});
+
+describe("PhoneDraw when the draw timer is pulled in mid-game", () => {
+  const MIRROR = JSON.stringify({ v: 1, s: [stroke(2)] });
+
+  it("still restores the mirror: the game's own start, not the re-anchored timer, files it", () => {
+    // The left-player grace shortens the draw deadline, so RoomCore re-anchors timerStartedAt
+    // mid-phase. The mirror must not be filed under that moving value.
+    window.sessionStorage.setItem(storageKey(mirrorScope("BKTZ", FIRST_PROMPT, GAME_START), "p1:0"), MIRROR);
+    renderDraw(baseView({ gameStartedAt: GAME_START }), vi.fn<(action: DoodleAction) => void>(), GAME_START + 100_000);
+    expect(screen.getByText(`Your drawing for ${FIRST_PROMPT}: 1 stroke so far`)).toBeTruthy();
+  });
+
+  it("still keeps one game's mirror out of the next game", () => {
+    window.sessionStorage.setItem(storageKey(mirrorScope("BKTZ", FIRST_PROMPT, GAME_START), "p1:0"), MIRROR);
+    renderDraw(baseView({ gameStartedAt: GAME_START + 600_000 }), vi.fn<(action: DoodleAction) => void>(), GAME_START + 600_000);
+    expect(screen.getByText(`Your drawing for ${FIRST_PROMPT}: 0 strokes so far`)).toBeTruthy();
+  });
+});
+
+describe("PhoneDraw after a remount", () => {
+  const DRAWING = "p1:0";
+
+  function mirror(strokes: number): Doodle {
+    return { v: 1, s: Array.from({ length: strokes }, () => stroke(2)) };
+  }
+
+  function withMirror(strokes: number): void {
+    window.sessionStorage.setItem(
+      storageKey(mirrorScope("BKTZ", FIRST_PROMPT, GAME_START), DRAWING),
+      JSON.stringify(mirror(strokes)),
+    );
+  }
+
+  it("resumes at the acked count instead of sending from: 0", () => {
+    withMirror(5);
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView({ myStrokeCounts: { [DRAWING]: 3 } }), send);
+    const strokeCalls = send.mock.calls.map(([action]) => action).filter((action) => action.type === "strokes");
+    expect(strokeCalls).toHaveLength(1);
+    expect(strokeCalls[0]).toMatchObject({ drawingId: DRAWING, from: 3 });
+    expect(strokeCalls[0]?.type === "strokes" && strokeCalls[0].strokes).toHaveLength(2);
+  });
+
+  it("keeps the strokes the room already has, instead of coming back blank", () => {
+    withMirror(3);
+    renderDraw(baseView({ myStrokeCounts: { [DRAWING]: 3 } }));
+    expect(screen.getByText("Your drawing for a cat riding a skateboard: 3 strokes so far")).toBeTruthy();
+  });
+
+  it("says nothing when the pad and the room are already level", () => {
+    withMirror(3);
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView({ myStrokeCounts: { [DRAWING]: 3 } }), send);
+    expect(send.mock.calls.filter(([action]) => action.type === "strokes")).toHaveLength(0);
+  });
+
+  it("stays on the room's count when there is no mirror to restore", () => {
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView({ myStrokeCounts: { [DRAWING]: 3 } }), send);
+    // Nothing to send: the pad came back blank, and the room's three strokes are the only copy
+    // of the drawing left. Sending from 0 here would be refused chunk after chunk.
+    expect(send.mock.calls.filter(([action]) => action.type === "strokes")).toHaveLength(0);
+  });
+
+  it("sends nothing for a drawing the artist has already finished", () => {
+    withMirror(5);
+    const send = vi.fn<(action: DoodleAction) => void>();
+    renderDraw(baseView({ myStrokeCounts: { [DRAWING]: 3 }, myDone: { [DRAWING]: true } }), send);
+    expect(send.mock.calls.filter(([action]) => action.type === "strokes")).toHaveLength(0);
+  });
+});
+
+describe("restoreMirror", () => {
+  it("restores a mirror level with the ack — the ordinary reconnect", () => {
+    const doodle = { v: 1 as const, s: [stroke(2), stroke(2)] };
+    window.sessionStorage.setItem(storageKey("BKTZ", "p1:0"), JSON.stringify(doodle));
+    expect(restoreMirror("BKTZ", "p1:0", 2)).toEqual(doodle);
+  });
+
+  it("restores a mirror ahead of the ack", () => {
+    const doodle = { v: 1 as const, s: [stroke(2), stroke(2)] };
+    window.sessionStorage.setItem(storageKey("BKTZ", "p1:0"), JSON.stringify(doodle));
+    expect(restoreMirror("BKTZ", "p1:0", 1)).toEqual(doodle);
+  });
+
+  it("drops a mirror behind the ack", () => {
+    window.sessionStorage.setItem(storageKey("BKTZ", "p1:0"), JSON.stringify({ v: 1, s: [stroke(2)] }));
+    expect(restoreMirror("BKTZ", "p1:0", 2)).toBeUndefined();
+  });
+
+  it("is undefined when nothing was mirrored", () => {
+    expect(restoreMirror("BKTZ", "p1:0", 0)).toBeUndefined();
+  });
+});
+
+describe("resyncCursor", () => {
+  it("pulls the cursor back when the server's ack falls behind it", () => {
+    const ref = sentCursorsRef({ "p1:0": 5 });
+    resyncCursor(ref, "p1:0", 2);
+    expect(ref.current["p1:0"]).toBe(2);
+  });
+
+  it("leaves the cursor alone once the ack has caught up", () => {
+    const ref = sentCursorsRef({ "p1:0": 5 });
+    resyncCursor(ref, "p1:0", 5);
+    expect(ref.current["p1:0"]).toBe(5);
+  });
+
+  it("treats a drawing never sent as cursor 0", () => {
+    const ref = sentCursorsRef();
+    resyncCursor(ref, "p1:0", 0);
+    expect(ref.current["p1:0"]).toBeUndefined();
+  });
+
+  it("never runs the cursor forward past what this phone has sent", () => {
+    const ref = sentCursorsRef({ "p1:0": 2 });
+    resyncCursor(ref, "p1:0", 4);
+    expect(ref.current["p1:0"]).toBe(2);
+  });
+});
+
+describe("readMirror", () => {
+  const KEY = storageKey("BKTZ", "p1:0");
+
+  it("returns null when nothing is stored", () => {
+    expect(readMirror("BKTZ", "p1:0")).toBeNull();
+  });
+
+  it("returns the parsed doodle when it validates", () => {
+    const doodle = { v: 1, s: [stroke(2)] };
+    window.sessionStorage.setItem(KEY, JSON.stringify(doodle));
+    expect(readMirror("BKTZ", "p1:0")).toEqual(doodle);
+  });
+
+  it("returns null for invalid JSON", () => {
+    window.sessionStorage.setItem(KEY, "{not json");
+    expect(readMirror("BKTZ", "p1:0")).toBeNull();
+  });
+
+  it("returns null for JSON that doesn't validate as a doodle", () => {
+    window.sessionStorage.setItem(KEY, JSON.stringify({ v: 1, s: "nope" }));
+    expect(readMirror("BKTZ", "p1:0")).toBeNull();
+  });
+});
+
+describe("commitDrawingChange", () => {
+  it("mirrors, sends the new strokes, and moves the cursor to the end", () => {
+    const send = vi.fn<(action: DoodleAction) => void>();
+    const sentRef = sentCursorsRef();
+    const doodle = { v: 1 as const, s: [stroke(2)] };
+    commitDrawingChange({ roomCode: "BKTZ", drawingId: "p1:0", doodle, sentRef, send });
+    expect(send).toHaveBeenCalledWith({ type: "strokes", drawingId: "p1:0", from: 0, strokes: [doodle.s[0]] });
+    expect(sentRef.current["p1:0"]).toBe(1);
+    expect(JSON.parse(window.sessionStorage.getItem(storageKey("BKTZ", "p1:0")) ?? "null")).toEqual(doodle);
+  });
+
+  it("sends only the strokes past the cursor", () => {
+    const send = vi.fn<(action: DoodleAction) => void>();
+    const sentRef = sentCursorsRef({ "p1:0": 1 });
+    const doodle = { v: 1 as const, s: [stroke(2), stroke(2)] };
+    commitDrawingChange({ roomCode: "BKTZ", drawingId: "p1:0", doodle, sentRef, send });
+    expect(send).toHaveBeenCalledWith({ type: "strokes", drawingId: "p1:0", from: 1, strokes: [doodle.s[1]] });
+    expect(sentRef.current["p1:0"]).toBe(2);
+  });
+
+  it("leaves the cursor on the room's count when the pad holds less than the room does, by default", () => {
+    // The pad of a phone whose mirror was gone starts blank while the room still holds strokes.
+    // Dropping the cursor to the pad's own count is what used to send `from: 0` into a void.
+    // `canTruncate` defaults to false, so a caller that doesn't say otherwise keeps this guard.
+    const send = vi.fn<(action: DoodleAction) => void>();
+    const sentRef = sentCursorsRef({ "p1:0": 3 });
+    commitDrawingChange({ roomCode: "BKTZ", drawingId: "p1:0", doodle: { v: 1, s: [stroke(2)] }, sentRef, send });
+    expect(send).not.toHaveBeenCalled();
+    expect(sentRef.current["p1:0"]).toBe(3);
+  });
+
+  // Issue #37: undo and clear are a real shrink of the pad, and, once the caller knows this pad's
+  // starting point can be trusted (canTruncate: true), must reach the room as a truncate — not be
+  // swallowed the way a lost-mirror shrink is above.
+  it("sends a truncate when the pad shrinks and canTruncate is true", () => {
+    const send = vi.fn<(action: DoodleAction) => void>();
+    const sentRef = sentCursorsRef({ "p1:0": 3 });
+    commitDrawingChange({
+      roomCode: "BKTZ",
+      drawingId: "p1:0",
+      doodle: { v: 1, s: [stroke(2)] },
+      sentRef,
+      send,
+      canTruncate: true,
+    });
+    expect(send).toHaveBeenCalledWith({ type: "truncate", drawingId: "p1:0", from: 3, to: 1 });
+    expect(sentRef.current["p1:0"]).toBe(1);
+  });
+
+  it("sends a truncate to 0 for a clear", () => {
+    const send = vi.fn<(action: DoodleAction) => void>();
+    const sentRef = sentCursorsRef({ "p1:0": 2 });
+    commitDrawingChange({
+      roomCode: "BKTZ",
+      drawingId: "p1:0",
+      doodle: { v: 1, s: [] },
+      sentRef,
+      send,
+      canTruncate: true,
+    });
+    expect(send).toHaveBeenCalledWith({ type: "truncate", drawingId: "p1:0", from: 2, to: 0 });
+    expect(sentRef.current["p1:0"]).toBe(0);
+  });
+});

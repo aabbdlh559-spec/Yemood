@@ -1,0 +1,142 @@
+import { describe, expect, it } from "vitest";
+import {
+  MAX_AWARDS,
+  MAX_MESSAGE_LENGTH,
+  cleanPlayerName,
+  playerNameKey,
+  normalizeRoomCode,
+  parseClientMessage,
+  parseCreateRoomRequest,
+  ROOM_CODE_RE,
+} from "./index";
+
+describe("parseClientMessage", () => {
+  it("accepts every well-formed message", () => {
+    const messages = [
+      { t: "host-hello", hostToken: "abc" },
+      { t: "join", name: "Priya" },
+      { t: "join", name: "Priya", token: "tok" },
+      { t: "set-avatar", avatar: "drop" },
+      { t: "pick-game", gameId: "imposter" },
+      { t: "set-pack", packId: "animals", enabled: false },
+      { t: "set-locked", locked: true },
+      { t: "set-shared-screen", sharedScreen: false },
+      { t: "kick", playerId: "p1" },
+      { t: "start-game" },
+      { t: "skip-phase" },
+      { t: "end-game" },
+      { t: "game-action", action: { type: "vote", target: "p2" } },
+    ];
+    for (const message of messages) {
+      expect(parseClientMessage(JSON.stringify(message))).toEqual(message);
+    }
+  });
+
+  it("rejects malformed frames", () => {
+    const frames = [
+      "not json",
+      JSON.stringify(null),
+      JSON.stringify([1, 2]),
+      JSON.stringify({ t: "nope" }),
+      JSON.stringify({ t: "set-avatar", avatar: "dragon" }),
+      JSON.stringify({ t: "set-pack", packId: "animals", enabled: "yes" }),
+      JSON.stringify({ t: "set-shared-screen", sharedScreen: "yes" }),
+      JSON.stringify({ t: "join", name: "x".repeat(65) }),
+      JSON.stringify({ t: "host-hello" }),
+      "x".repeat(5000),
+    ];
+    for (const frame of frames) expect(parseClientMessage(frame)).toBeNull();
+    expect(parseClientMessage(new ArrayBuffer(8))).toBeNull();
+  });
+
+  it("drops unknown fields instead of passing them through", () => {
+    expect(
+      parseClientMessage(JSON.stringify({ t: "start-game", extra: 1 })),
+    ).toEqual({ t: "start-game" });
+  });
+
+  it("answers null for a frame nested too deep to walk", () => {
+    const depth = (MAX_MESSAGE_LENGTH - 30) / 2;
+    const action = "[".repeat(depth) + "]".repeat(depth);
+    const frame = `{"t":"game-action","action":${action}}`;
+
+    expect(frame.length).toBeLessThanOrEqual(MAX_MESSAGE_LENGTH);
+    expect(parseClientMessage(frame)).toBeNull();
+  });
+});
+
+describe("cleanPlayerName", () => {
+  it("trims and collapses whitespace", () => {
+    expect(cleanPlayerName("  Maya   Lee ")).toBe("Maya Lee");
+  });
+
+  it("rejects a name that draws nothing, so no player shows up blank", () => {
+    expect(cleanPlayerName("​")).toBeNull();
+    expect(cleanPlayerName(" ‏‎ ")).toBeNull();
+    expect(cleanPlayerName("⠀ㅤ")).toBeNull();
+    expect(cleanPlayerName("﻿")).toBeNull();
+  });
+
+  it("keeps an invisible mark inside a name, but not at its edges", () => {
+    expect(cleanPlayerName("\u{1F468}\u200d\u{1F469}")).toBe("\u{1F468}\u200d\u{1F469}");
+    expect(cleanPlayerName("\u05d3\u05e0\u05d4\u200f")).toBe("\u05d3\u05e0\u05d4");
+    expect(cleanPlayerName("\u200b Dana \u200b")).toBe("Dana");
+    expect(cleanPlayerName("\u200b\u200b Dana")).toBe("Dana");
+  });
+
+  it("rejects empty and overlong names", () => {
+    expect(cleanPlayerName("   ")).toBeNull();
+    expect(cleanPlayerName("abcdefghijklm")).toBeNull();
+  });
+});
+
+describe("playerNameKey", () => {
+  it("ignores case, invisible characters and Unicode form", () => {
+    expect(playerNameKey("Dana​")).toBe(playerNameKey("DANA"));
+    expect(playerNameKey("Zoë")).toBe(playerNameKey("Zoë"));
+    expect(playerNameKey("Dana")).not.toBe(playerNameKey("Dani"));
+    expect(playerNameKey("\u200b Dana")).toBe(playerNameKey("Dana"));
+    expect(playerNameKey("Da \u200b na")).toBe(playerNameKey("Da na"));
+  });
+});
+
+describe("parseCreateRoomRequest", () => {
+  it("defaults to a shared-screen room for a missing, empty or malformed body", () => {
+    expect(parseCreateRoomRequest("")).toEqual({});
+    expect(parseCreateRoomRequest("not json")).toEqual({});
+    expect(parseCreateRoomRequest(JSON.stringify({ sharedScreen: "nope" }))).toEqual({});
+  });
+
+  it("reads an explicit sharedScreen value", () => {
+    expect(
+      parseCreateRoomRequest(JSON.stringify({ sharedScreen: false })),
+    ).toEqual({ sharedScreen: false });
+  });
+
+  it("reads an explicit contentLanguage value", () => {
+    expect(
+      parseCreateRoomRequest(JSON.stringify({ contentLanguage: "he" })),
+    ).toEqual({ contentLanguage: "he" });
+  });
+
+  it("drops an unsupported contentLanguage", () => {
+    expect(
+      parseCreateRoomRequest(JSON.stringify({ contentLanguage: "fr" })),
+    ).toEqual({});
+  });
+});
+
+describe("room codes", () => {
+  it("normalizes case and validates the consonant alphabet", () => {
+    expect(normalizeRoomCode(" bktz ")).toBe("BKTZ");
+    expect(ROOM_CODE_RE.test("BKTZ")).toBe(true);
+    expect(ROOM_CODE_RE.test("BATZ")).toBe(false);
+  });
+});
+
+describe("GameResultSummary", () => {
+  it("documents the award cap the SDK enforces", () => {
+    // The cap itself lives in sanitizeAwards (packages/sdk/src/room.ts), tested there.
+    expect(MAX_AWARDS).toBe(3);
+  });
+});

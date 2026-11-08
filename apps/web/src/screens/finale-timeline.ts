@@ -1,0 +1,156 @@
+// Pure beat timeline for the finale ceremony: awards, then the crown. Anchored on
+// `lastResult.finishedAt`, so the TV and every phone stage the same ~25s moment off the
+// server clock alone, with no per-beat server messages.
+import { format, joinNamesAnd } from "@opg/i18n";
+import type { Dictionary } from "@opg/i18n";
+import type { PlayerId } from "@opg/protocol";
+import type { Beat } from "@opg/ui";
+
+export const FINALE_TIMING = {
+  wrapMs: 0,
+  firstAwardMs: 2000,
+  awardStepMs: 3000,
+  crownIntroAfterMs: 0,
+  thirdAfterIntroMs: 3000,
+  secondAfterIntroMs: 5000,
+  crownAfterIntroMs: 8000,
+  settleAfterIntroMs: 11000,
+  drumrollMs: 3000,
+} as const;
+
+/** ms from the ceremony start to "And the crown goes to…", after every award has stamped in. */
+function crownIntroAtMs(awardCount: number): number {
+  return (
+    FINALE_TIMING.firstAwardMs +
+    awardCount * FINALE_TIMING.awardStepMs +
+    FINALE_TIMING.crownIntroAfterMs
+  );
+}
+
+export interface FinaleBeatsInput {
+  awardCount: number;
+  /**
+   * The highest rank anyone holds (0 when nobody is ranked). A tie for first plays no
+   * third or second beat, because nobody is standing at those ranks.
+   */
+  rankedCount: number;
+}
+
+function awardBeats(awardCount: number): Beat[] {
+  const beats: Beat[] = [];
+  for (let index = 0; index < awardCount; index += 1) {
+    beats.push({
+      id: `award-${index}`,
+      atMs: FINALE_TIMING.firstAwardMs + index * FINALE_TIMING.awardStepMs,
+      cue: "tape",
+    });
+  }
+  return beats;
+}
+
+/**
+ * Beats: wrap(0, whoosh), award-i (2000 + 3000i, tape), crown-intro (drumroll),
+ * third (pop) and second (pop) when there are enough ranked players, crown (fanfare), settle.
+ */
+export function finaleBeats(input: FinaleBeatsInput): Beat[] {
+  const crownIntroAt = crownIntroAtMs(input.awardCount);
+  const beats: Beat[] = [
+    { id: "wrap", atMs: FINALE_TIMING.wrapMs, cue: "whoosh" },
+    ...awardBeats(input.awardCount),
+    { id: "crown-intro", atMs: crownIntroAt, cue: "drumroll" },
+  ];
+  if (input.rankedCount >= 3) {
+    beats.push({
+      id: "third",
+      atMs: crownIntroAt + FINALE_TIMING.thirdAfterIntroMs,
+      cue: "pop",
+    });
+  }
+  if (input.rankedCount >= 2) {
+    beats.push({
+      id: "second",
+      atMs: crownIntroAt + FINALE_TIMING.secondAfterIntroMs,
+      cue: "pop",
+    });
+  }
+  beats.push(
+    {
+      id: "crown",
+      atMs: crownIntroAt + FINALE_TIMING.crownAfterIntroMs,
+      cue: "fanfare",
+    },
+    { id: "settle", atMs: crownIntroAt + FINALE_TIMING.settleAfterIntroMs },
+  );
+  return beats;
+}
+
+/**
+ * The ids in `order` that `scores` actually carries. A room can hold players who joined
+ * mid-game, or between games, and never played this round — `lastResult.scores` is keyed by
+ * exactly the participants, so filtering to that key set (rather than defaulting a missing
+ * score to 0) keeps a bystander out of the ranking instead of announcing them in last place.
+ */
+export function participantIds(
+  scores: Readonly<Record<PlayerId, number>>,
+  order: readonly PlayerId[],
+): PlayerId[] {
+  return order.filter((id) => id in scores);
+}
+
+export interface RankedPlayer {
+  id: PlayerId;
+  score: number;
+  rank: number;
+}
+
+interface ScoredRow {
+  id: PlayerId;
+  score: number;
+}
+
+/** Highest score first, stable on ties (using `order`). ES2022 has no Array#toSorted. */
+function sortByScore(rows: readonly ScoredRow[]): ScoredRow[] {
+  const remaining = [...rows];
+  const sorted: ScoredRow[] = [];
+  while (remaining.length > 0) {
+    const best = Math.max(...remaining.map((row) => row.score));
+    const at = remaining.findIndex((row) => row.score === best);
+    sorted.push(...remaining.splice(at, 1));
+  }
+  return sorted;
+}
+
+/** Highest score first; ties share a rank, so the next rank skips. */
+export function rankPlayers(
+  scores: Readonly<Record<PlayerId, number>>,
+  order: readonly PlayerId[],
+): RankedPlayer[] {
+  const sorted = sortByScore(
+    order.map((id) => ({ id, score: scores[id] ?? 0 })),
+  );
+  let rank = 0;
+  let lastScore: number | null = null;
+  return sorted.map((row, index) => {
+    if (lastScore === null || row.score !== lastScore) {
+      rank = index + 1;
+      lastScore = row.score;
+    }
+    return { id: row.id, score: row.score, rank };
+  });
+}
+
+/** The highest rank anyone holds, which is what decides the third and second beats. */
+export function topRank(ranked: readonly RankedPlayer[]): number {
+  return ranked.reduce((top, row) => Math.max(top, row.rank), 0);
+}
+
+/** "{name} wins the crown!" / "{names} share the crown!", or null when nobody won. */
+export function crownCopy(t: Dictionary, names: readonly string[]): string | null {
+  if (names.length === 0) return null;
+  if (names.length === 1) {
+    return format(t.results.crownWins, { name: names[0] ?? "" });
+  }
+  return format(t.results.crownShares, {
+    names: joinNamesAnd(t.common, names),
+  });
+}

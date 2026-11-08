@@ -1,0 +1,981 @@
+import { describe, expect, it } from "vitest";
+import { LEFT_PLAYER_GRACE_MS } from "@opg/sdk";
+import type { Fact, FactContent, GameContext, Rng } from "@opg/sdk";
+import type { PlayerId } from "@opg/protocol";
+import {
+  FACTS_PER_GAME,
+  LIE_MAX_LENGTH,
+  POINTS_PER_FOOL,
+  POINTS_TRUTH,
+  VOTE_MS,
+  WRITE_MS,
+  bot,
+  buildHostView,
+  buildPlayerView,
+  isOver,
+  nextDeadline,
+  onAction,
+  onDeadline,
+  onPlayerRemoved,
+  onPlayersChanged,
+  planLiesOf,
+  revealDurationMs,
+  revealPlan,
+  ronActionSchema,
+  realOrNah,
+  setup,
+  type RonState,
+  type RonAction,
+} from "./index";
+
+// ---------- Fixtures ----------
+
+function fact(
+  id: string,
+  answer: string,
+  alternates: string[],
+  decoys: string[],
+): Fact {
+  return {
+    id,
+    prompt: `${id} is ____.`,
+    answer,
+    alternates,
+    decoys,
+    source: { title: `${id} source`, url: `https://example.com/${id}` },
+  };
+}
+
+const EMU = fact(
+  "emu",
+  "emus",
+  ["emu"],
+  ["kangaroos", "rabbits", "cane toads"],
+);
+const SCOTLAND = fact(
+  "scotland",
+  "unicorn",
+  ["unicorns"],
+  ["red deer", "golden eagle", "highland cow"],
+);
+
+const MANY_FACTS: FactContent = {
+  kind: "facts",
+  items: [
+    EMU,
+    SCOTLAND,
+    fact("f3", "cubes", ["cube"], ["stars", "spirals", "pyramids"]),
+    fact("f4", "three", ["3"], ["two", "five", "nine"]),
+    fact("f5", "year", [], ["decade", "century", "month"]),
+    fact("f6", "trees", ["tree"], ["jellyfish", "sponges", "the Moon"]),
+    fact("f7", "radioactive", [], ["magnetic", "electric", "glowing"]),
+    fact("f8", "BackRub", ["back rub"], ["Googol", "PageFinder", "LinkLoop"]),
+  ],
+};
+
+const ONE_FACT: FactContent = { kind: "facts", items: [EMU] };
+const TWO_FACTS: FactContent = { kind: "facts", items: [EMU, SCOTLAND] };
+
+const BASE_NOW = 1000;
+
+/** Deterministic LCG so every expectation is reproducible. */
+function makeRng(seed: number): Rng {
+  let state = seed >>> 0;
+  const next = (): number => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+  return {
+    next,
+    int: (maxExclusive) => Math.floor(next() * maxExclusive),
+    shuffle: <T>(items: readonly T[]): T[] => {
+      const copy = [...items];
+      for (let i = copy.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(next() * (i + 1));
+        const a = copy[i];
+        const b = copy[j];
+        if (a === undefined || b === undefined) continue;
+        copy[i] = b;
+        copy[j] = a;
+      }
+      return copy;
+    },
+    pick: <T>(items: readonly T[]): T => {
+      if (items.length === 0) throw new Error("pick from empty");
+      const item = items[Math.floor(next() * items.length)];
+      if (item === undefined) throw new Error("pick out of range");
+      return item;
+    },
+  };
+}
+
+function makePlayers(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `p${i + 1}`,
+    name: `P${i + 1}`,
+    avatar: null,
+  }));
+}
+
+function makeCtx(
+  opts: {
+    n?: number;
+    connected?: PlayerId[];
+    content?: FactContent;
+    now?: number;
+    seed?: number;
+  } = {},
+): GameContext<FactContent> {
+  const n = opts.n ?? 4;
+  const players = makePlayers(n);
+  return {
+    players,
+    connectedIds: opts.connected ?? players.map((p) => p.id),
+    rng: makeRng(opts.seed ?? 7),
+    now: opts.now ?? BASE_NOW,
+    content: opts.content ?? ONE_FACT,
+  };
+}
+
+function lie(
+  state: RonState,
+  playerId: PlayerId,
+  text: string,
+  ctx: GameContext<FactContent>,
+): RonState {
+  const action = ronActionSchema.safeParse({ type: "lie", text }).data ?? null;
+  if (action === null) throw new Error("bad test action");
+  return onAction(state, playerId, action, ctx);
+}
+
+function pick(
+  state: RonState,
+  playerId: PlayerId,
+  optionId: string,
+  ctx: GameContext<FactContent>,
+): RonState {
+  const action =
+    ronActionSchema.safeParse({ type: "pick", optionId }).data ?? null;
+  if (action === null) throw new Error("bad test action");
+  return onAction(state, playerId, action, ctx);
+}
+
+function optionIdByText(state: RonState, text: string): string {
+  const option = (state.options ?? []).find((o) => o.text === text);
+  if (option === undefined) throw new Error(`no option ${text}`);
+  return option.id;
+}
+
+/** Fails loudly instead of asserting conditionally when a bot answers wrongly. */
+function lieText(action: RonAction | null): string {
+  if (action === null || action.type !== "lie")
+    throw new Error("expected a lie action");
+  return action.text;
+}
+
+function pickedOptionId(action: RonAction | null): string {
+  if (action === null || action.type !== "pick")
+    throw new Error("expected a pick action");
+  return action.optionId;
+}
+
+/**
+ * Every remaining author's counted points equal the truth points plus the sum of the
+ * points the reveal shows their lies earning. A kick must keep this true.
+ */
+function expectCountedPointsMatchReveal(state: RonState): void {
+  const reveal = state.reveal;
+  const shown = reveal?.lies ?? [];
+  for (const id of state.playerIds) {
+    const truth = (reveal?.foundByIds ?? []).includes(id) ? POINTS_TRUTH : 0;
+    const lies = shown
+      .filter((shownLie) => shownLie.authorId === id)
+      .reduce((sum, shownLie) => sum + shownLie.points, 0);
+    expect(state.pointsThisFact[id] ?? 0).toBe(truth + lies);
+  }
+}
+
+// ---------- Tests ----------
+
+describe("setup", () => {
+  it("picks min(6, items) distinct facts", () => {
+    const ctx = makeCtx({ content: MANY_FACTS });
+    const state = setup(ctx);
+    expect(state.facts).toHaveLength(FACTS_PER_GAME);
+    expect(new Set(state.facts.map((f) => f.id)).size).toBe(FACTS_PER_GAME);
+    expect(state.phase).toBe("write");
+    expect(state.deadline).toBe(BASE_NOW + WRITE_MS);
+    expect(state.scores).toEqual({ p1: 0, p2: 0, p3: 0, p4: 0 });
+  });
+
+  it("uses every item when the pack is smaller than the cap", () => {
+    const state = setup(makeCtx({ content: TWO_FACTS }));
+    expect(state.facts).toHaveLength(2);
+  });
+});
+
+describe("lie validation", () => {
+  it("rejects the truth and its alternates with a new state carrying lieError", () => {
+    const ctx = makeCtx();
+    const state = setup(ctx);
+    for (const text of ["emus", "emu", "The Emus!", "  EMU "]) {
+      const next = lie(state, "p1", text, ctx);
+      expect(next).not.toBe(state);
+      expect(next.lieErrors.p1).toBe("truth");
+      expect(next.lies.p1).toBeUndefined();
+    }
+  });
+
+  it("rejects the truth typed with niqqud, without an apostrophe, or in a decomposed accent", () => {
+    const ctx = makeCtx({
+      content: {
+        kind: "facts",
+        items: [
+          fact("hebrew", "שלום", [], ["אחד", "שניים", "שלושה"]),
+          fact("dont", "don't stop", [], ["keep going", "slow down", "pause"]),
+          fact("cafe", "café", [], ["bar", "pub", "diner"]),
+        ],
+      },
+    });
+    const cases: Array<[string, string]> = [
+      ["hebrew", "שָׁלוֹם"],
+      ["dont", "dont stop"],
+      ["dont", "don\u2019t stop"],
+      ["cafe", "cafe\u0301"],
+    ];
+    for (const [id, text] of cases) {
+      const state = setup(ctx);
+      const only = { ...state, factIndex: state.facts.findIndex((f) => f.id === id) };
+      const next = lie(only, "p1", text, ctx);
+      expect(`${text}: ${next.lieErrors.p1}`).toBe(`${text}: truth`);
+    }
+  });
+
+  it("treats the same Hebrew lie with and without niqqud as a duplicate", () => {
+    const ctx = makeCtx();
+    let state = setup(ctx);
+    state = lie(state, "p1", "גירפה", ctx);
+    expect(lie(state, "p2", "גִּירָפָה", ctx).lieErrors.p2).toBe("duplicate");
+  });
+
+  it("accepts a cleaned lie and clears a previous error", () => {
+    const ctx = makeCtx();
+    const rejected = lie(setup(ctx), "p1", "emus", ctx);
+    expect(rejected.lieErrors.p1).toBe("truth");
+    const accepted = lie(rejected, "p1", "  a   giant   bird  ", ctx);
+    expect(accepted.lies.p1).toBe("a giant bird");
+    expect(accepted.lieErrors.p1).toBeUndefined();
+  });
+
+  it("accepts different emoji-only lies because they normalize to empty", () => {
+    const ctx = makeCtx();
+    let state = setup(ctx);
+    state = lie(state, "p1", "🐸", ctx);
+    expect(state.lieErrors.p1).toBeUndefined();
+    const other = lie(state, "p2", "🦄", ctx);
+    expect(other.lieErrors.p2).toBeUndefined();
+    expect(other.lies.p2).toBe("🦄");
+  });
+
+  it("rejects an identical emoji-only lie as a duplicate", () => {
+    const ctx = makeCtx();
+    let state = setup(ctx);
+    state = lie(state, "p1", "🐸", ctx);
+    const dup = lie(state, "p2", "🐸", ctx);
+    expect(dup.lieErrors.p2).toBe("duplicate");
+    expect(dup.lies.p2).toBeUndefined();
+  });
+
+  it("rejects another player's lie as duplicate after normalization", () => {
+    const ctx = makeCtx();
+    let state = setup(ctx);
+    state = lie(state, "p1", "giraffe", ctx);
+    const dup = lie(state, "p2", "  GIRAFFE!  ", ctx);
+    expect(dup).not.toBe(state);
+    expect(dup.lieErrors.p2).toBe("duplicate");
+    expect(dup.lies.p2).toBeUndefined();
+  });
+
+  it("rejects empty and too-long lies as invalid", () => {
+    const ctx = makeCtx();
+    const state = setup(ctx);
+    for (const text of ["", "   ", "x".repeat(LIE_MAX_LENGTH + 1)]) {
+      const next = lie(state, "p1", text, ctx);
+      expect(next).not.toBe(state);
+      expect(next.lieErrors.p1).toBe("invalid");
+    }
+    const ok = lie(state, "p1", "x".repeat(LIE_MAX_LENGTH), ctx);
+    expect(ok.lies.p1).toHaveLength(LIE_MAX_LENGTH);
+  });
+
+  it("rejects a second lie from the same player with the same state object", () => {
+    const ctx = makeCtx();
+    let state = setup(ctx);
+    state = lie(state, "p1", "giraffe", ctx);
+    expect(lie(state, "p1", "hippos", ctx)).toBe(state);
+  });
+
+  it("rejects a lie in the wrong phase with the same state object", () => {
+    const ctx = makeCtx({ content: TWO_FACTS });
+    const state = onDeadline(setup(ctx), ctx);
+    expect(state.phase).toBe("vote");
+    expect(lie(state, "p1", "giraffe", ctx)).toBe(state);
+  });
+});
+
+describe("options", () => {
+  it("fills with decoys up to MIN_OPTIONS, skipping decoys equal to a lie", () => {
+    const ctx = makeCtx({ n: 3, content: ONE_FACT });
+    let state = lie(setup(ctx), "p1", "kangaroos", ctx); // same word as a decoy
+    state = onDeadline(state, ctx);
+    expect(state.phase).toBe("vote");
+    const options = state.options ?? [];
+    expect(options).toHaveLength(4);
+    expect(options.map((o) => o.id)).toEqual(["o1", "o2", "o3", "o4"]);
+    const texts = options.map((o) => o.text.toLowerCase());
+    expect(new Set(texts).size).toBe(texts.length);
+    expect(texts).toContain("emus"); // truth
+    expect(texts).toContain("kangaroos"); // the lie
+    expect(
+      texts.filter((t) =>
+        ["emus", "kangaroos", "rabbits", "cane toads"].includes(t),
+      ),
+    ).toHaveLength(4);
+  });
+
+  it("skips decoys that normalize equal to a lie", () => {
+    const ctx = makeCtx({
+      n: 3,
+      content: {
+        kind: "facts",
+        items: [fact("x", "cat", [], ["The Dog", "a horse", "bird"])],
+      },
+    });
+    let state = lie(setup(ctx), "p1", "dog", ctx);
+    state = onDeadline(state, ctx);
+    const texts = (state.options ?? []).map((o) => o.text);
+    expect(texts.filter((t) => /dog/i.test(t))).toHaveLength(1);
+    expect(texts).toHaveLength(4);
+  });
+});
+
+describe("early phase ends", () => {
+  it("ends write at once when every player has submitted", () => {
+    const ctx = makeCtx({ n: 2 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    expect(state.phase).toBe("write");
+    state = lie(state, "p2", "hippos", ctx);
+    expect(state.phase).toBe("vote");
+    expect(state.deadline).toBe(BASE_NOW + VOTE_MS);
+  });
+
+  it("ends vote at once when every player who can pick has picked", () => {
+    const ctx = makeCtx({ n: 2 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = onDeadline(state, ctx);
+    expect(state.phase).toBe("vote");
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    expect(state.phase).toBe("vote");
+    state = pick(state, "p2", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    expect(state.reveal).not.toBeNull();
+    expect(state.deadline).toBe(
+      BASE_NOW +
+        revealDurationMs({ lies: planLiesOf(state.reveal ?? { lies: [] }) }),
+    );
+  });
+});
+
+describe("left-player grace", () => {
+  function toVote(ctx: GameContext<FactContent>): RonState {
+    const written = lie(setup(ctx), "p1", "giraffe", ctx);
+    return onDeadline(written, ctx);
+  }
+
+  it("write: pulls the deadline in when only disconnected players are missing", () => {
+    const ctx = makeCtx({ n: 4, connected: ["p1", "p2"] });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    expect(state.phase).toBe("write");
+    state = lie(state, "p2", "hippos", ctx);
+    expect(state.phase).toBe("write");
+    expect(state.deadline).toBe(BASE_NOW + LEFT_PLAYER_GRACE_MS);
+    const due = { ...ctx, now: state.deadline ?? 0 };
+    expect(onDeadline(state, due).phase).toBe("vote");
+  });
+
+  it("vote: pulls the deadline in when only disconnected players are missing", () => {
+    const ctx = makeCtx({ n: 4, connected: ["p1", "p2"] });
+    let state = toVote(ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    expect(state.phase).toBe("vote");
+    expect(state.deadline).toBe(BASE_NOW + LEFT_PLAYER_GRACE_MS);
+  });
+
+  it("vote: pulls in when the last connected holdout disconnects", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = toVote(ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    expect(state.deadline).toBe(BASE_NOW + VOTE_MS);
+    const gone = { ...ctx, now: BASE_NOW + 4000, connectedIds: ["p1", "p2"] };
+    const next = onPlayersChanged(state, gone);
+    expect(next.phase).toBe("vote");
+    expect(next.deadline).toBe(BASE_NOW + 4000 + LEFT_PLAYER_GRACE_MS);
+    const stillThere = { ...ctx, connectedIds: ["p1", "p2", "p3"] };
+    expect(onPlayersChanged(state, stillThere)).toBe(state);
+  });
+
+  it("write: pulls in when the last connected writer is the one left", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = lie(state, "p2", "hippos", ctx);
+    expect(state.deadline).toBe(BASE_NOW + WRITE_MS);
+    const gone = { ...ctx, now: BASE_NOW + 1000, connectedIds: ["p1", "p2"] };
+    expect(onPlayersChanged(state, gone).deadline).toBe(
+      BASE_NOW + 1000 + LEFT_PLAYER_GRACE_MS,
+    );
+  });
+
+  it("counts a holdout who reconnects and picks inside the grace", () => {
+    const away = makeCtx({ n: 3, connected: ["p1", "p2"] });
+    let state = toVote(away);
+    const originalDeadline = state.deadline;
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, away);
+    state = pick(state, "p2", truthId, away);
+    expect(state.phase).toBe("vote");
+    expect(state.deadline).toBe(BASE_NOW + LEFT_PLAYER_GRACE_MS);
+    const back = { ...away, now: BASE_NOW + 3000, connectedIds: ["p1", "p2", "p3"] };
+    const restored = onPlayersChanged(state, back);
+    expect(restored.deadline).toBe(originalDeadline);
+    expect(onPlayersChanged(restored, back)).toBe(restored);
+    state = pick(restored, "p3", truthId, back);
+    expect(state.phase).toBe("reveal");
+    expect(state.votes.p3).toBe(truthId);
+  });
+
+  it("never pushes a nearer deadline out and ignores other phases", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = lie(state, "p2", "hippos", ctx);
+    const late = { ...ctx, now: BASE_NOW + WRITE_MS - 1000, connectedIds: ["p1", "p2"] };
+    expect(onPlayersChanged(state, late)).toBe(state);
+    const reveal = { ...state, phase: "reveal" as const };
+    expect(onPlayersChanged(reveal, late)).toBe(reveal);
+  });
+});
+
+describe("picking", () => {
+  it("rejects a player's own lie with the same state object", () => {
+    const ctx = makeCtx({ n: 3, content: TWO_FACTS });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = onDeadline(state, ctx);
+    const own = state.options?.find((o) => o.authorId === "p1");
+    expect(own).toBeDefined();
+    expect(pick(state, "p1", own?.id ?? "", ctx)).toBe(state);
+  });
+
+  it("rejects a second pick and an unknown option with the same state object", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    expect(pick(state, "p1", truthId, ctx)).toBe(state);
+    expect(pick(state, "p2", "nope", ctx)).toBe(state);
+  });
+});
+
+describe("scoring", () => {
+  it("awards truth and fool points, accumulating across facts and finishing", () => {
+    const ctx = makeCtx({ n: 3, content: TWO_FACTS });
+    let state = setup(ctx);
+
+    // --- Fact 1: p1 + p2 lie, p3 waits for the deadline ---
+    state = lie(state, "p1", "aaa", ctx);
+    state = lie(state, "p2", "bbb", ctx);
+    const answer1 = state.facts[0]?.answer ?? "";
+    const answer2 = state.facts[1]?.answer ?? "";
+    state = onDeadline(state, ctx);
+    expect(state.phase).toBe("vote");
+    const truth1 = optionIdByText(state, answer1);
+    const p1Lie = optionIdByText(state, "aaa");
+    const p2Lie = optionIdByText(state, "bbb");
+    state = pick(state, "p1", truth1, ctx); // p1 finds truth
+    state = pick(state, "p2", p1Lie, ctx); // p2 fooled by p1
+    state = pick(state, "p3", p2Lie, ctx); // p3 fooled by p2
+    expect(state.phase).toBe("reveal");
+    expect(state.reveal?.foundByIds).toEqual(["p1"]);
+    expect(state.pointsThisFact).toEqual({
+      p1: POINTS_TRUTH + POINTS_PER_FOOL,
+      p2: POINTS_PER_FOOL,
+      p3: 0,
+    });
+    expect(state.scores).toEqual({
+      p1: POINTS_TRUTH + POINTS_PER_FOOL,
+      p2: POINTS_PER_FOOL,
+      p3: 0,
+    });
+
+    // --- Fact 2: same pattern, scores accumulate, then the game ends ---
+    state = onDeadline(state, ctx);
+    expect(state.phase).toBe("write");
+    expect(state.factIndex).toBe(1);
+    state = lie(state, "p1", "ccc", ctx);
+    state = lie(state, "p2", "ddd", ctx);
+    state = onDeadline(state, ctx);
+    const truth2 = optionIdByText(state, answer2);
+    const p1Lie2 = optionIdByText(state, "ccc");
+    const p2Lie2 = optionIdByText(state, "ddd");
+    state = pick(state, "p1", truth2, ctx);
+    state = pick(state, "p2", p1Lie2, ctx);
+    state = pick(state, "p3", p2Lie2, ctx);
+    expect(state.phase).toBe("reveal");
+    expect(state.scores.p1).toBe(2 * (POINTS_TRUTH + POINTS_PER_FOOL));
+    expect(state.scores.p2).toBe(2 * POINTS_PER_FOOL);
+
+    state = onDeadline(state, ctx);
+    expect(state.finished).toBe(true);
+    expect(isOver(state)).toBe(true);
+    expect(nextDeadline(state)).toBeNull();
+    expect(realOrNah.scores(state)).toEqual(state.scores);
+  });
+});
+
+describe("house decoys", () => {
+  it("reveals a decoy that fooled someone, paying nobody", () => {
+    const ctx = makeCtx({ n: 3, content: TWO_FACTS });
+    let state = setup(ctx);
+    state = lie(state, "p1", "aaa", ctx);
+    state = lie(state, "p2", "bbb", ctx);
+    // p3 lets the write deadline pass, so the options fall short of MIN_OPTIONS and
+    // the drawn fact's first house decoy fills the last slot.
+    state = onDeadline(state, ctx);
+    expect(state.phase).toBe("vote");
+    const decoyText = state.facts[state.factIndex]?.decoys[0] ?? "";
+    expect(decoyText).not.toBe("");
+    const decoyId = optionIdByText(state, decoyText);
+    state = pick(state, "p1", decoyId, ctx);
+    state = pick(state, "p2", decoyId, ctx);
+    state = pick(state, "p3", optionIdByText(state, "aaa"), ctx);
+    expect(state.phase).toBe("reveal");
+
+    const decoy = state.reveal?.lies.find(
+      (fooled) => fooled.optionId === decoyId,
+    );
+    expect(decoy?.authorId).toBeNull();
+    expect(decoy?.fooledIds).toEqual(["p1", "p2"]);
+    // Two players fell for the decoy, but a decoy has no author to pay.
+    expect(state.pointsThisFact).toEqual({ p1: POINTS_PER_FOOL, p2: 0, p3: 0 });
+    const lieSegments = revealPlan({
+      lies: planLiesOf(state.reveal ?? { lies: [] }),
+    }).filter((segment) => segment.kind === "lie");
+    expect(lieSegments.map((segment) => segment.optionId)).toContain(decoyId);
+  });
+});
+
+describe("view secrecy", () => {
+  it("never serializes the truth flag or author ids before reveal", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+
+    const writeHost = JSON.stringify(buildHostView(state));
+    const writePlayer = JSON.stringify(buildPlayerView(state, "p2"));
+    for (const json of [writeHost, writePlayer]) {
+      expect(json).not.toContain("isTruth");
+      expect(json).not.toContain("authorId");
+      expect(json).not.toContain("truthOptionId");
+      expect(json).not.toContain('"reveal":{');
+    }
+    expect(JSON.parse(writePlayer).options).toBeNull();
+
+    state = onDeadline(state, ctx);
+    const voteHost = JSON.stringify(buildHostView(state));
+    const votePlayer = JSON.stringify(buildPlayerView(state, "p2"));
+    for (const json of [voteHost, votePlayer]) {
+      expect(json).not.toContain("isTruth");
+      expect(json).not.toContain("authorId");
+      expect(json).not.toContain("truthOptionId");
+    }
+    expect(JSON.parse(voteHost).options.length).toBeGreaterThanOrEqual(4);
+
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    state = pick(state, "p3", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    const revealPlayer = JSON.parse(
+      JSON.stringify(buildPlayerView(state, "p1")),
+    );
+    expect(revealPlayer.reveal.truthOptionId).toBe(truthId);
+    expect(revealPlayer.myPoints).toBe(POINTS_TRUTH);
+  });
+});
+
+describe("parseAction", () => {
+  it("rejects malformed payloads", () => {
+    for (const raw of [
+      null,
+      42,
+      "lie",
+      [],
+      {},
+      { type: "lie" },
+      { type: "lie", text: 5 },
+      { type: "lie", text: "x".repeat(201) },
+      { type: "pick" },
+      { type: "pick", optionId: "" },
+      { type: "pick", optionId: 5 },
+      { type: "pick", optionId: "x".repeat(65) },
+      { type: "nope" },
+    ]) {
+      expect(ronActionSchema.safeParse(raw).data ?? null).toBeNull();
+    }
+  });
+
+  it("accepts only the valid shapes", () => {
+    expect(
+      ronActionSchema.safeParse({ type: "lie", text: "" }).data ?? null,
+    ).toEqual({
+      type: "lie",
+      text: "",
+    });
+    expect(
+      ronActionSchema.safeParse({ type: "lie", text: "x".repeat(200) }).data ??
+        null,
+    ).toEqual({
+      type: "lie",
+      text: "x".repeat(200),
+    });
+    expect(
+      ronActionSchema.safeParse({ type: "pick", optionId: "o1" }).data ?? null,
+    ).toEqual({
+      type: "pick",
+      optionId: "o1",
+    });
+  });
+});
+
+describe("onPlayerRemoved", () => {
+  it("drops the lie and pick, anonymizes their option and scores nothing for it", () => {
+    const ctx = makeCtx({ n: 4, connected: ["p1", "p3", "p4"] });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = lie(state, "p2", "bbb", ctx);
+    state = onDeadline(state, ctx);
+    expect(state.phase).toBe("vote");
+
+    const removed = onPlayerRemoved(state, "p2", ctx);
+    expect(removed.playerIds).toEqual(["p1", "p3", "p4"]);
+    expect(removed.lies.p2).toBeUndefined();
+    expect(removed.votes.p2).toBeUndefined();
+    expect(removed.scores.p2).toBeUndefined();
+    expect(removed.options?.find((o) => o.text === "bbb")?.authorId).toBeNull();
+    expect(removed.options?.find((o) => o.text === "aaa")?.authorId).toBe("p1");
+
+    // p1 finds the truth; p3 is fooled by p1; p4 picks p2's now-anonymous option.
+    const truthId = optionIdByText(removed, "emus");
+    const p1Lie = optionIdByText(removed, "aaa");
+    const anonOption = removed.options?.find((o) => o.text === "bbb");
+    let next = pick(removed, "p1", truthId, ctx);
+    next = pick(next, "p3", p1Lie, ctx);
+    next = pick(next, "p4", anonOption?.id ?? "", ctx);
+    expect(next.phase).toBe("reveal");
+    expect(next.reveal?.lies.map((l) => l.authorId)).toEqual(["p1"]);
+    expect(next.scores.p1).toBe(POINTS_TRUTH + POINTS_PER_FOOL);
+    expect(Object.keys(next.scores)).toEqual(["p1", "p3", "p4"]);
+    expect(next.pointsThisFact.p2).toBeUndefined();
+  });
+});
+
+describe("onPlayerRemoved edges", () => {
+  it("ignores a player who is not in the game", () => {
+    const ctx = makeCtx({ n: 3 });
+    const state = setup(ctx);
+    expect(onPlayerRemoved(state, "ghost", ctx)).toBe(state);
+  });
+
+  it("starts the vote when the removed player was the last one writing", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = lie(state, "p3", "hippos", ctx);
+    expect(state.phase).toBe("write");
+    state = onPlayerRemoved(state, "p2", ctx);
+    expect(state.phase).toBe("vote");
+    expect(state.options?.some((o) => o.text === "giraffe")).toBe(true);
+  });
+
+  it("pulls the write phase in when the removed player was the last connected one writing", () => {
+    const ctx = makeCtx({ n: 3, connected: ["p1", "p2"] });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = onPlayerRemoved(state, "p2", ctx);
+    expect(state.phase).toBe("write");
+    expect(state.deadline).toBe(BASE_NOW + LEFT_PLAYER_GRACE_MS);
+  });
+
+  it("starts the reveal when the removed player was the last one voting", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    expect(state.phase).toBe("vote");
+    state = onPlayerRemoved(state, "p3", ctx);
+    expect(state.phase).toBe("reveal");
+    expect(state.reveal?.lies.map((l) => l.authorId)).toEqual(["p1"]);
+  });
+
+  it("recomputes the reveal when a player leaves after the vote", () => {
+    const ctx = makeCtx({ n: 4 });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    state = pick(state, "p3", optionIdByText(state, "aaa"), ctx);
+    state = pick(state, "p4", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    expect(state.reveal?.foundByIds).toEqual(["p1", "p2", "p4"]);
+
+    const after = onPlayerRemoved(state, "p1", ctx);
+    expect(after.playerIds).toEqual(["p2", "p3", "p4"]);
+    expect(after.reveal?.foundByIds).toEqual(["p2", "p4"]);
+    expect(after.reveal?.lies).toEqual([]);
+    expect(after.scores.p1).toBeUndefined();
+    expectCountedPointsMatchReveal(after);
+  });
+
+  it("leaves the reveal deadline unchanged when a player is kicked mid-reveal", () => {
+    const ctx = makeCtx({ n: 4 });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    state = pick(state, "p3", optionIdByText(state, "aaa"), ctx);
+    state = pick(state, "p4", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    const deadlineBeforeKick = state.deadline;
+
+    const after = onPlayerRemoved(state, "p3", ctx);
+    expect(after.phase).toBe("reveal");
+    expect(after.deadline).toBe(deadlineBeforeKick);
+  });
+
+  it("freezes planLies (and so every beat time) when a player is kicked mid-reveal", () => {
+    const ctx = makeCtx({ n: 4 });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    const p1Lie = optionIdByText(state, "aaa");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    state = pick(state, "p3", p1Lie, ctx); // p3 is fooled by p1's lie
+    state = pick(state, "p4", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    const planBefore = state.reveal?.planLies;
+    expect(planBefore?.find((p) => p.optionId === p1Lie)?.fooledCount).toBe(1);
+
+    // Kicking the only voter fooled by p1's lie must not shrink that lie's shown points:
+    // the reveal counted 500 for it into `pointsThisFact`, so it keeps 500 on stage, and
+    // the frozen plan, and so the reveal's timing, does not move either.
+    const after = onPlayerRemoved(state, "p3", ctx);
+    expect(after.reveal?.planLies).toEqual(planBefore);
+    expect(
+      after.reveal?.lies.find((l) => l.optionId === p1Lie),
+    ).toMatchObject({ fooledIds: ["p3"], points: POINTS_PER_FOOL });
+    expect(after.pointsThisFact.p1).toBe(POINTS_TRUTH + POINTS_PER_FOOL);
+    expect(
+      revealPlan({ lies: planLiesOf(after.reveal ?? { lies: [] }) }),
+    ).toEqual(revealPlan({ lies: planLiesOf(state.reveal ?? { lies: [] }) }));
+  });
+
+  it("keeps a lie's shown points matching the standings when a fooled player is kicked mid-reveal", () => {
+    const ctx = makeCtx({ n: 4 });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    const p1Lie = optionIdByText(state, "aaa");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", p1Lie, ctx); // p2 is fooled by p1's lie
+    state = pick(state, "p3", p1Lie, ctx); // p3 is fooled by p1's lie
+    state = pick(state, "p4", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    expect(state.reveal?.lies.find((l) => l.optionId === p1Lie)?.points).toBe(
+      2 * POINTS_PER_FOOL,
+    );
+    expect(state.pointsThisFact.p1).toBe(POINTS_TRUTH + 2 * POINTS_PER_FOOL);
+
+    // The TV row and p1's phone card show +1,000 for the lie, and the standings count
+    // +2,000 this fact, before and after the kick.
+    const after = onPlayerRemoved(state, "p3", ctx);
+    expect(
+      after.reveal?.lies.find((l) => l.optionId === p1Lie),
+    ).toMatchObject({ fooledIds: ["p2", "p3"], points: 2 * POINTS_PER_FOOL });
+    expect(after.pointsThisFact.p1).toBe(POINTS_TRUTH + 2 * POINTS_PER_FOOL);
+    expect(after.scores.p1).toBe(state.scores.p1);
+    expectCountedPointsMatchReveal(after);
+  });
+
+  it("shows a lie's beat with no author once that author is kicked mid-reveal", () => {
+    const ctx = makeCtx({ n: 4 });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    const p1Lie = optionIdByText(state, "aaa");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", p1Lie, ctx); // p2 is fooled by p1's lie
+    state = pick(state, "p3", truthId, ctx);
+    state = pick(state, "p4", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    const planBefore = state.reveal?.planLies;
+
+    // Kicking the lie's own author drops the option from `lies` entirely (its authorId
+    // is anonymized to null, which filters it out), but the beat it was assigned stays.
+    const after = onPlayerRemoved(state, "p1", ctx);
+    expect(after.reveal?.lies.some((l) => l.optionId === p1Lie)).toBe(false);
+    expect(after.reveal?.planLies).toEqual(planBefore);
+    expect(after.deadline).toBe(state.deadline);
+  });
+});
+
+describe("finished game", () => {
+  it("ignores actions and deadlines once every fact is done", () => {
+    const ctx = makeCtx({ content: ONE_FACT });
+    const done = onDeadline(onDeadline(onDeadline(setup(ctx), ctx), ctx), ctx);
+    expect(done.finished).toBe(true);
+    expect(onAction(done, "p1", { type: "lie", text: "giraffe" }, ctx)).toBe(
+      done,
+    );
+    expect(onDeadline(done, ctx)).toBe(done);
+  });
+
+  it("finishes straight away when the pack has no facts", () => {
+    const ctx = makeCtx({ content: { kind: "facts", items: [] } });
+    const state = setup(ctx);
+    expect(state.finished).toBe(true);
+    expect(state.deadline).toBeNull();
+    expect(buildHostView(state).prompt).toBe("");
+  });
+});
+
+describe("bot", () => {
+  it("submits a bounded lie during write", () => {
+    const ctx = makeCtx({ n: 3 });
+    const view = buildPlayerView(setup(ctx), "p2");
+    const action = bot(view, makeRng(1));
+    expect(action?.type).toBe("lie");
+    expect(lieText(action).length).toBeLessThanOrEqual(LIE_MAX_LENGTH);
+  });
+
+  it("does not lie twice and picks a random option that is not its own", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = onDeadline(state, ctx);
+    const view = buildPlayerView(state, "p2");
+    expect(view.myLie).toBeNull();
+    const action = bot(view, makeRng(2));
+    expect(action?.type).toBe("pick");
+    const option = view.options?.find((o) => o.id === pickedOptionId(action));
+    expect(option?.mine).toBe(false);
+  });
+
+  it("waits during reveal", () => {
+    const ctx = makeCtx({ n: 3 });
+    let state = lie(setup(ctx), "p1", "giraffe", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    state = pick(state, "p3", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+    expect(bot(buildPlayerView(state, "p1"), makeRng(3))).toBeNull();
+  });
+});
+
+describe("fact history for awards", () => {
+  it("records one entry per fact, built from the final reveal", () => {
+    const ctx = makeCtx({ n: 3, content: TWO_FACTS });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = lie(state, "p2", "bbb", ctx);
+    state = onDeadline(state, ctx);
+    const truth1 = optionIdByText(state, state.facts[0]?.answer ?? "");
+    const p1Lie = optionIdByText(state, "aaa");
+    const p2Lie = optionIdByText(state, "bbb");
+    state = pick(state, "p1", truth1, ctx);
+    state = pick(state, "p2", p1Lie, ctx);
+    state = pick(state, "p3", p2Lie, ctx);
+    expect(state.phase).toBe("reveal");
+
+    state = onDeadline(state, ctx); // leaves the reveal
+    expect(state.history).toHaveLength(1);
+    const [entry] = state.history ?? [];
+    expect(entry?.foundByIds).toEqual(["p1"]);
+    expect(entry?.picks).toEqual({ p1: truth1, p2: p1Lie, p3: p2Lie });
+    expect(new Set(entry?.lies.map((l) => l.authorId))).toEqual(
+      new Set(["p1", "p2"]),
+    );
+  });
+
+  it("records the last fact's reveal before the game finishes", () => {
+    const ctx = makeCtx({ n: 3, content: ONE_FACT });
+    let state = lie(setup(ctx), "p1", "aaa", ctx);
+    state = onDeadline(state, ctx);
+    const truthId = optionIdByText(state, "emus");
+    state = pick(state, "p1", truthId, ctx);
+    state = pick(state, "p2", truthId, ctx);
+    state = pick(state, "p3", truthId, ctx);
+    expect(state.phase).toBe("reveal");
+
+    state = onDeadline(state, ctx);
+    expect(state.finished).toBe(true);
+    expect(state.history).toHaveLength(1);
+  });
+
+  it("does not record a phase left before any reveal happened", () => {
+    const ctx = makeCtx({ content: TWO_FACTS });
+    const state = onDeadline(setup(ctx), ctx); // write -> vote, no reveal yet
+    expect(state.phase).toBe("vote");
+    expect(state.history ?? []).toEqual([]);
+  });
+});
+
+describe("awards wiring", () => {
+  it("exposes realOrNahAwards as the game's awards hook", () => {
+    const ctx = makeCtx({ n: 3, content: TWO_FACTS });
+    let state = setup(ctx);
+    state = lie(state, "p1", "aaa", ctx);
+    state = lie(state, "p2", "bbb", ctx);
+    state = onDeadline(state, ctx);
+    const truth1 = optionIdByText(state, state.facts[0]?.answer ?? "");
+    const p1Lie = optionIdByText(state, "aaa");
+    state = pick(state, "p1", truth1, ctx);
+    state = pick(state, "p2", p1Lie, ctx);
+    state = pick(state, "p3", p1Lie, ctx);
+    state = onDeadline(state, ctx); // leaves the reveal
+    expect(realOrNah.awards?.(state)).toEqual([
+      { id: "best-liar", playerIds: ["p1"], value: 2 },
+      { id: "greatest-hit", playerIds: ["p1"], value: 2 },
+    ]);
+  });
+});
+
+describe("deadlines", () => {
+  it("advances exactly one transition per deadline", () => {
+    const ctx = makeCtx({ content: ONE_FACT });
+    const state = setup(ctx);
+    expect(nextDeadline(state)).toBe(BASE_NOW + WRITE_MS);
+    const afterWrite = onDeadline(state, ctx);
+    expect(afterWrite.phase).toBe("vote");
+
+    const afterVote = onDeadline(afterWrite, ctx);
+    expect(afterVote.phase).toBe("reveal");
+
+    const afterReveal = onDeadline(afterVote, ctx);
+    expect(afterReveal.finished).toBe(true);
+  });
+});

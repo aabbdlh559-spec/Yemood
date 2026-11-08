@@ -1,0 +1,199 @@
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CueHandle, SoundEngine, SoundStatus } from "@opg/ui";
+import { App, lazyEngine } from "./App";
+import { resetFakeSockets } from "./screens/fixtures/socket";
+
+class FakeEngine implements SoundEngine {
+  preloadCount = 0;
+
+  status(): SoundStatus {
+    return "running";
+  }
+
+  subscribe(): () => void {
+    return () => {
+      /* status never changes */
+    };
+  }
+
+  unlock(): void {
+    /* nothing to resume */
+  }
+
+  setMuted(): void {
+    /* nothing to mute */
+  }
+
+  preload(): void {
+    this.preloadCount += 1;
+  }
+
+  play(): CueHandle {
+    return {
+      stop() {
+        /* nothing is playing */
+      },
+    };
+  }
+
+  playMusic(): void {
+    /* no music in tests */
+  }
+
+  stopAll(): void {
+    /* nothing is playing */
+  }
+}
+
+function renderAt(path: string) {
+  window.history.pushState(null, "", path);
+  return render(<App />);
+}
+
+const matchMediaDescriptor = Object.getOwnPropertyDescriptor(
+  window,
+  "matchMedia",
+);
+
+/** Narrow touch devices route "/" to the phone landing instead of the TV landing. */
+function stubNarrowTouch(): void {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (media: string) => ({ media, matches: true }),
+  });
+}
+
+function restoreMatchMedia(): void {
+  if (matchMediaDescriptor) {
+    Object.defineProperty(window, "matchMedia", matchMediaDescriptor);
+  } else {
+    Reflect.deleteProperty(window, "matchMedia");
+  }
+}
+
+beforeEach(() => {
+  resetFakeSockets();
+  localStorage.clear();
+  sessionStorage.clear();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  restoreMatchMedia();
+});
+
+describe("App routing", () => {
+  it("renders the TV landing at the root", () => {
+    renderAt("/");
+    expect(screen.getByText("Party games for")).toBeTruthy();
+  });
+
+  it("scales the landing inside the TV stage", () => {
+    const { container } = renderAt("/");
+    const stage = container.querySelector(".opg-grid-tv");
+    expect(stage).not.toBeNull();
+    expect(stage?.textContent).toContain("Party games for");
+  });
+
+  it("scales the credits page inside the TV stage", () => {
+    const { container } = renderAt("/credits");
+    expect(container.querySelector(".opg-grid-tv")).not.toBeNull();
+  });
+
+  it("sends a narrow touch device at the root to the phone landing, not the join form", () => {
+    stubNarrowTouch();
+    renderAt("/");
+    expect(screen.getByText("Party games for")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /start a room/i })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /join a room/i }),
+    ).toBeTruthy();
+  });
+
+  it("renders the phone join form at /join", () => {
+    renderAt("/join");
+    expect(screen.getByText("Join a game")).toBeTruthy();
+  });
+
+  it("renders the player app at a room code", () => {
+    renderAt("/BKTZ");
+    expect(screen.getByText("Join a game")).toBeTruthy();
+  });
+
+  it("renders the host app at /host/<code>", async () => {
+    // No host token here, so the host app asks the server whether the room exists at all
+    // before deciding what to say about it.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        Response.json({
+          code: "BKTZ",
+          exists: true,
+          locked: false,
+          inGame: false,
+          playerCount: 1,
+          joinable: true,
+        }),
+      ),
+    );
+    renderAt("/host/BKTZ");
+    expect(
+      await screen.findByText("This room is hosted on another screen"),
+    ).toBeTruthy();
+  });
+
+  it("renders the credits page", () => {
+    renderAt("/credits");
+    expect(screen.getByText("Credits")).toBeTruthy();
+  });
+
+  it("renders the privacy page", () => {
+    renderAt("/privacy");
+    expect(screen.getByText("Privacy")).toBeTruthy();
+  });
+
+  it("renders the contact-the-developer page on the silent engine", () => {
+    const engine = new FakeEngine();
+    window.history.pushState(null, "", "/contact");
+    render(<App engine={engine} />);
+    expect(screen.getByRole("heading", { name: "التواصل مع المطور" })).toBeTruthy();
+    expect(engine.preloadCount).toBe(0);
+  });
+
+  it("uses the injected engine on TV routes", () => {
+    const engine = new FakeEngine();
+    window.history.pushState(null, "", "/credits");
+    render(<App engine={engine} />);
+    expect(engine.preloadCount).toBe(1);
+  });
+
+  it("keeps phone routes on the silent engine", () => {
+    const engine = new FakeEngine();
+    window.history.pushState(null, "", "/join");
+    render(<App engine={engine} />);
+    expect(engine.preloadCount).toBe(0);
+  });
+
+  it("lazy-loads the dev sound board", async () => {
+    renderAt("/dev/sounds");
+    // Longer than the one-second default: this waits on a real dynamic import, and the wait
+    // is for a machine, not for the app. On a loaded runner the chunk can take longer than a
+    // second to arrive, and the test then fails for being busy rather than for being wrong.
+    expect(
+      await screen.findByText("Sound board", undefined, { timeout: 10_000 }),
+    ).toBeTruthy();
+  });
+});
+
+describe("lazyEngine", () => {
+  it("builds the engine only when asked, and only once", () => {
+    const create = vi.fn<() => SoundEngine>(() => new FakeEngine());
+    const get = lazyEngine(create);
+    expect(create).not.toHaveBeenCalled();
+    const first = get();
+    expect(get()).toBe(first);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});

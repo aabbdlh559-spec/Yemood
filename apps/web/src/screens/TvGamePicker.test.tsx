@@ -1,0 +1,362 @@
+import type { ReactElement } from "react";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { en, LocaleProvider } from "@opg/i18n";
+import { SoundProvider } from "@opg/ui";
+import type { CueHandle, CueId, SoundEngine, SoundStatus } from "@opg/ui";
+import {
+  animatedProperties,
+  restoreMatchMedia,
+  spyAnimate,
+  stubReducedMotion,
+} from "./fixtures/motion";
+import { makeGame, makeHostView, makePack, makePlayer } from "./fixtures/room";
+import { TvGamePicker } from "./TvGamePicker";
+
+/** This screen reads its copy from the dictionary, so every render needs a provider. */
+function renderLocalized(ui: ReactElement) {
+  return render(ui, { wrapper: LocaleProvider });
+}
+
+class FakeEngine implements SoundEngine {
+  readonly cues: CueId[] = [];
+
+  status(): SoundStatus {
+    return "running";
+  }
+
+  subscribe(): () => void {
+    return () => {
+      /* status never changes */
+    };
+  }
+
+  unlock(): void {
+    /* nothing to resume */
+  }
+
+  setMuted(): void {
+    /* nothing to mute */
+  }
+
+  preload(): void {
+    /* no samples */
+  }
+
+  play(cue: CueId): CueHandle {
+    this.cues.push(cue);
+    return {
+      stop() {
+        /* nothing is playing */
+      },
+    };
+  }
+
+  playMusic(): void {
+    /* nothing to play */
+  }
+
+  stopAll(): void {
+    /* nothing is playing */
+  }
+}
+
+const IMPOSTER = makeGame({ id: "imposter", name: "Imposter" });
+const DRAW = makeGame({ id: "draw", name: "Draw It" });
+const CHARADES = makeGame({ id: "charades", name: "Charades" });
+const BLUFF = makeGame({ id: "bluff", name: "Doodle Bluff" });
+
+function switchState(name: string): string | null {
+  return screen.getByRole("switch", { name }).getAttribute("aria-checked");
+}
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  restoreMatchMedia();
+});
+
+describe("TvGamePicker", () => {
+  it("marks the picked game and names its packs", () => {
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          games: [IMPOSTER, DRAW],
+          selectedGameId: "imposter",
+        })}
+      />,
+    );
+    expect(screen.getAllByText("Picked").length).toBe(1);
+    expect(screen.getByText("Imposter packs")).toBeTruthy();
+  });
+
+  it("shows no picked stamp while the VIP has not chosen", () => {
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          games: [IMPOSTER, DRAW],
+          selectedGameId: "",
+        })}
+      />,
+    );
+    expect(screen.queryByText("Picked")).toBeNull();
+    expect(screen.getByText("Packs")).toBeTruthy();
+  });
+
+  it("names the VIP who is picking", () => {
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          players: [makePlayer({ id: "p1", name: "Priya", isVip: true })],
+          vipId: "p1",
+        })}
+      />,
+    );
+    expect(screen.getByText("Priya")).toBeTruthy();
+    expect(
+      screen.getByText(/Priya starts the game from their phone/),
+    ).toBeTruthy();
+  });
+
+  it("falls back when no VIP has joined", () => {
+    renderLocalized(<TvGamePicker view={makeHostView({ players: [], vipId: null })} />);
+    expect(screen.getByText("Someone")).toBeTruthy();
+    expect(
+      screen.getByText(/The VIP starts the game from their phone/),
+    ).toBeTruthy();
+  });
+
+  it("shows an adult pack as on and a teen pack as off", () => {
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          packs: [
+            makePack({
+              id: "after-dark",
+              name: "After Dark",
+              rating: "adult",
+              enabled: true,
+            }),
+            makePack({
+              id: "school",
+              name: "School",
+              rating: "teen",
+              enabled: false,
+            }),
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText("Adult")).toBeTruthy();
+    expect(screen.getByText("Teen")).toBeTruthy();
+    expect(switchState("After Dark pack")).toBe("true");
+    expect(switchState("School pack")).toBe("false");
+  });
+
+  it("shows the pack switches as read-only, not a control the TV can flip", () => {
+    // The VIP's phone owns this setting; the TV only mirrors it. A host clicking from a
+    // laptop trackpad must not be able to toggle a pack from here.
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          packs: [makePack({ id: "animals", name: "Animals", enabled: true })],
+        })}
+      />,
+    );
+    const toggle = screen.getByRole("switch", { name: "Animals pack" });
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("counts the players who are still playing", () => {
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          players: [
+            makePlayer({ id: "p1" }),
+            makePlayer({ id: "p2", waitingForNextGame: true }),
+            makePlayer({ id: "p3" }),
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText(/· 2 players/)).toBeTruthy();
+  });
+
+  it("counts a lone player in the singular", () => {
+    renderLocalized(<TvGamePicker view={makeHostView({ players: [makePlayer()] })} />);
+    expect(screen.getByText(/· 1 player$/)).toBeTruthy();
+  });
+
+  it("says when a game has no packs yet", () => {
+    renderLocalized(<TvGamePicker view={makeHostView({ packs: [] })} />);
+    expect(screen.getByText("No packs for this game yet.")).toBeTruthy();
+  });
+
+  it("plays no cue on mount, even with a game already picked", () => {
+    const engine = new FakeEngine();
+    renderLocalized(
+      <SoundProvider engine={engine}>
+        <TvGamePicker
+          view={makeHostView({
+            games: [IMPOSTER, DRAW],
+            selectedGameId: "imposter",
+          })}
+        />
+      </SoundProvider>,
+    );
+    expect(engine.cues).toEqual([]);
+  });
+
+  it("dims a game with nothing in the room's language and says why, on that card only", () => {
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          games: [IMPOSTER, makeGame({ id: "draw", name: "Draw It", hasContentInLanguage: false })],
+          selectedGameId: "imposter",
+        })}
+      />,
+    );
+    const note = screen.getByText(en.picker.noContentInLanguage);
+    const unavailable = note.closest("[data-unavailable]");
+    expect(unavailable?.textContent).toContain("Draw It");
+    expect(unavailable?.getAttribute("style")).toContain("opacity: 0.55");
+    expect(document.querySelectorAll("[data-unavailable]")).toHaveLength(1);
+  });
+
+  it("shows all three games and lets the third be picked", () => {
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          games: [IMPOSTER, DRAW, CHARADES],
+          selectedGameId: "charades",
+        })}
+      />,
+    );
+    expect(screen.getByText("Imposter")).toBeTruthy();
+    expect(screen.getByText("Draw It")).toBeTruthy();
+    expect(screen.getByText("Charades")).toBeTruthy();
+    expect(screen.getAllByText("Picked").length).toBe(1);
+    expect(screen.getByText("Charades packs")).toBeTruthy();
+  });
+
+  it("keeps a fourth game in the same row instead of wrapping it off the card grid", () => {
+    // Four games is today's whole roster (imposter, real-or-nah, most-likely-to,
+    // doodle-bluff): the card grid must give each one a column in a single row rather
+    // than wrapping a card into a second row the stage has no room for underneath.
+    const { container } = renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          games: [IMPOSTER, DRAW, CHARADES, BLUFF],
+          selectedGameId: "bluff",
+        })}
+      />,
+    );
+    expect(screen.getByText("Imposter")).toBeTruthy();
+    expect(screen.getByText("Draw It")).toBeTruthy();
+    expect(screen.getByText("Charades")).toBeTruthy();
+    expect(screen.getByText("Doodle Bluff")).toBeTruthy();
+    const cardGrid = [...container.querySelectorAll<HTMLElement>("div")].find(
+      (el) => el.style.gridTemplateColumns.includes("repeat("),
+    );
+    expect(cardGrid?.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
+  });
+
+  it("pops and tapes the newly picked card when the pick changes live", () => {
+    const engine = new FakeEngine();
+    const { rerender } = renderLocalized(
+      <SoundProvider engine={engine}>
+        <TvGamePicker
+          view={makeHostView({
+            games: [IMPOSTER, DRAW],
+            selectedGameId: "imposter",
+          })}
+        />
+      </SoundProvider>,
+    );
+    rerender(
+      <SoundProvider engine={engine}>
+        <TvGamePicker
+          view={makeHostView({
+            games: [IMPOSTER, DRAW],
+            selectedGameId: "draw",
+          })}
+        />
+      </SoundProvider>,
+    );
+    expect(engine.cues).toEqual(["tape"]);
+  });
+});
+
+describe("TvGamePicker, in Hebrew", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("opg:locale");
+  });
+
+  it("renders the pick heading and packs panel in Hebrew", () => {
+    window.localStorage.setItem("opg:locale", "he");
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          players: [makePlayer({ id: "p1", name: "Priya", isVip: true })],
+          vipId: "p1",
+        })}
+      />,
+    );
+    expect(screen.getByText("— בחירת המשחק")).toBeTruthy();
+    expect(screen.getAllByText(/חפיסות/).length).toBeGreaterThan(0);
+  });
+
+  it("labels the pack switches in Hebrew, not On and Off", () => {
+    window.localStorage.setItem("opg:locale", "he");
+    renderLocalized(
+      <TvGamePicker
+        view={makeHostView({
+          games: [IMPOSTER, DRAW],
+          selectedGameId: "imposter",
+          packs: [makePack({ id: "a", enabled: true }), makePack({ id: "b", enabled: false })],
+        })}
+      />,
+    );
+    expect(screen.queryByText("On")).toBeNull();
+    expect(screen.queryByText("Off")).toBeNull();
+    expect(screen.getAllByText("פועל").length).toBe(1);
+    expect(screen.getAllByText("כבוי").length).toBe(1);
+  });
+});
+
+/** Mounts with Imposter picked, then the VIP switches to Draw It: the picker's one live pick. */
+function switchPick(reduced: boolean) {
+  stubReducedMotion(reduced);
+  const animate = spyAnimate();
+  const engine = new FakeEngine();
+  const picker = (selectedGameId: string) => (
+    <SoundProvider engine={engine}>
+      <TvGamePicker
+        view={makeHostView({ games: [IMPOSTER, DRAW], selectedGameId })}
+      />
+    </SoundProvider>
+  );
+  const { rerender } = renderLocalized(picker("imposter"));
+  const cuesBeforePick = [...engine.cues];
+  rerender(picker("draw"));
+  return { animate, cuesBeforePick, cues: engine.cues };
+}
+
+describe("TvGamePicker, reduced motion", () => {
+  it("still tapes the pick the moment it changes, and only then", () => {
+    const { cuesBeforePick, cues } = switchPick(true);
+    expect(cuesBeforePick).toEqual([]);
+    expect(cues).toEqual(["tape"]);
+  });
+
+  it("fades the picked card in instead of scaling it", () => {
+    const { animate } = switchPick(true);
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animatedProperties(animate)).toEqual(["opacity"]);
+  });
+
+  it("scales the picked card in when nobody asked for less motion", () => {
+    const { animate } = switchPick(false);
+    expect(animatedProperties(animate)).toEqual(["scale"]);
+  });
+});

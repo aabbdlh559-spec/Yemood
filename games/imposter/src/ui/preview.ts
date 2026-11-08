@@ -1,0 +1,1154 @@
+// Sample Imposter screens for previews and UI tests, driven off a fixed server clock.
+import type {
+  AvatarId,
+  HostRoomView,
+  PlayerId,
+  PlayerRoomView,
+  PlayerSummary,
+} from "@opg/protocol";
+import type { PreviewMoment } from "@opg/ui";
+import { LAST_CHANCE_MS, REVEAL_MS, resultDurationMs } from "../state";
+import type { ImposterHostView, ImposterPlayerView } from "../state";
+
+const SERVER_NOW = 1735689600000;
+
+const MAYA = "maya";
+const DOV = "dov";
+const PRIYA = "priya";
+const SAM = "sam";
+const NOA = "noa";
+const LEO = "leo";
+
+const WORD_CHECK_DEADLINE = SERVER_NOW + 6000;
+const CLUES_DEADLINE = SERVER_NOW + 22000;
+const VOTE_DEADLINE = SERVER_NOW + 31000;
+const REVEAL_DEADLINE = SERVER_NOW + 1000;
+const LAST_CHANCE_DEADLINE = SERVER_NOW + 12000;
+const RESULT_DEADLINE = SERVER_NOW + 7000;
+
+/** A reveal already at its 11s mark, so previews and tests render the settled end state. */
+export const REVEAL_PREVIEW_START = SERVER_NOW - 11000;
+
+/**
+ * A last-chance with only 5 seconds left. No `timerStartedAt`: `HostLastChance` has no beat
+ * ceremony of its own (no `useMoment`), but its `Timer` still computes an elapsed fraction from
+ * `startedAt`, and the dev gallery freezes `now` at `timerStartedAt` when one is set -- so a
+ * `timerStartedAt` here would pin `now` to the same instant `Timer` treats as the countdown's
+ * start, always showing the full 15 seconds left (`0:15`) instead of the near-the-end state this
+ * fixture is for, whatever the deadline said. Passing only a closer deadline keeps `now` at the
+ * room's own clock instead, so the countdown text actually reads down.
+ */
+const LAST_CHANCE_TYPING_DEADLINE = SERVER_NOW + 5000;
+
+/** A result already past its settle beat, so previews and tests render the settled end state. */
+export const RESULT_PREVIEW_START = SERVER_NOW - 12000;
+/**
+ * `deadline - RESULT_CAUGHT_MS` (14000) reproduces `RESULT_PREVIEW_START` exactly, so a caught
+ * result fixture that passes only this deadline (no `timerStartedAt`) still anchors its beats
+ * there -- see the note on the "Host: reveal" family for why the frozen dev-gallery clock needs
+ * that indirection instead of a `timerStartedAt` set directly.
+ */
+const RESULT_PREVIEW_DEADLINE = SERVER_NOW + 2000;
+/**
+ * The escaped path is shorter (`RESULT_ESCAPED_MS`, 9000), so it needs its own deadline to land
+ * on the same `RESULT_PREVIEW_START` anchor: `deadline - 9000 = RESULT_PREVIEW_START` gives
+ * `SERVER_NOW - 3000`.
+ */
+const RESULT_PREVIEW_DEADLINE_ESCAPED = SERVER_NOW - 3000;
+
+function player(
+  id: PlayerId,
+  name: string,
+  avatar: AvatarId,
+  extra: { crowns?: number; isVip?: boolean } = {},
+): PlayerSummary {
+  return {
+    id,
+    name,
+    avatar,
+    connected: true,
+    isVip: extra.isVip ?? false,
+    crowns: extra.crowns ?? 0,
+    waitingForNextGame: false,
+  };
+}
+
+const PLAYERS: PlayerSummary[] = [
+  player(MAYA, "Maya", "star", { isVip: true }),
+  player(DOV, "Dov", "toast", { crowns: 2 }),
+  player(PRIYA, "Priya", "drop", { crowns: 1 }),
+  player(SAM, "Sam", "cloud"),
+  player(NOA, "Noa", "cat"),
+  player(LEO, "Leo", "mushroom"),
+];
+
+const ALL_IDS = PLAYERS.map((p) => p.id);
+const CLUE_ORDER: PlayerId[] = [MAYA, DOV, PRIYA, SAM, NOA, LEO];
+const VOTED_IDS: PlayerId[] = [MAYA, DOV, SAM, NOA, LEO];
+
+const CREW_WORD = "GIRAFFE";
+const DECOY_WORD = "ZEBRA";
+
+const TOTALS = {
+  [MAYA]: 1500,
+  [DOV]: 1500,
+  [SAM]: 1000,
+  [NOA]: 1000,
+  [PRIYA]: 1000,
+  [LEO]: 500,
+} satisfies Record<PlayerId, number>;
+
+const TALLY = {
+  [PRIYA]: [MAYA, DOV, SAM, NOA],
+  [DOV]: [LEO],
+  [LEO]: [PRIYA],
+} satisfies Record<PlayerId, PlayerId[]>;
+
+/** Dov takes the most votes, but the imposter is Priya. */
+const WRONG_TALLY = {
+  [DOV]: [MAYA, SAM, NOA],
+  [LEO]: [DOV, PRIYA],
+  [PRIYA]: [LEO],
+} satisfies Record<PlayerId, PlayerId[]>;
+
+/** Dov and Priya tie 2-2. */
+const TIE_TALLY = {
+  [DOV]: [MAYA, SAM],
+  [PRIYA]: [DOV, NOA],
+  [LEO]: [PRIYA],
+  [MAYA]: [LEO],
+} satisfies Record<PlayerId, PlayerId[]>;
+
+const POINTS_THIS_WORD = {
+  [MAYA]: 500,
+  [DOV]: 500,
+  [SAM]: 500,
+  [NOA]: 500,
+  [PRIYA]: 0,
+  [LEO]: 0,
+} satisfies Record<PlayerId, number>;
+
+const HOST_BASE = {
+  wordNumber: 3,
+  wordCount: 6,
+  playerIds: ALL_IDS,
+  clueOrder: CLUE_ORDER,
+  totals: TOTALS,
+};
+
+const hostWordCheck: ImposterHostView = {
+  ...HOST_BASE,
+  phase: "word-check",
+  currentSpeakerId: null,
+  doneSpeakerIds: [],
+  votedIds: [],
+  tally: null,
+  imposterId: null,
+  caught: null,
+  decoyWord: null,
+  crewWord: null,
+  guess: null,
+  guessCorrect: null,
+  pointsThisWord: null,
+  guessLength: null,
+};
+
+const hostClues: ImposterHostView = {
+  ...HOST_BASE,
+  phase: "clues",
+  currentSpeakerId: DOV,
+  doneSpeakerIds: [MAYA],
+  votedIds: [],
+  tally: null,
+  imposterId: null,
+  caught: null,
+  decoyWord: null,
+  crewWord: null,
+  guess: null,
+  guessCorrect: null,
+  pointsThisWord: null,
+  guessLength: null,
+};
+
+const hostVote: ImposterHostView = {
+  ...HOST_BASE,
+  phase: "vote",
+  currentSpeakerId: null,
+  doneSpeakerIds: CLUE_ORDER,
+  votedIds: VOTED_IDS,
+  tally: null,
+  imposterId: null,
+  caught: null,
+  decoyWord: null,
+  crewWord: null,
+  guess: null,
+  guessCorrect: null,
+  pointsThisWord: null,
+  guessLength: null,
+};
+
+const hostReveal: ImposterHostView = {
+  ...HOST_BASE,
+  phase: "reveal",
+  currentSpeakerId: null,
+  doneSpeakerIds: CLUE_ORDER,
+  votedIds: ALL_IDS,
+  tally: TALLY,
+  imposterId: PRIYA,
+  caught: true,
+  decoyWord: DECOY_WORD,
+  crewWord: null,
+  guess: null,
+  guessCorrect: null,
+  pointsThisWord: null,
+  guessLength: null,
+};
+
+const hostLastChance: ImposterHostView = {
+  ...hostReveal,
+  phase: "last-chance",
+  guessLength: 5,
+};
+
+/** Dov takes the most votes; Priya, the real imposter, gets away. */
+const hostRevealWrong: ImposterHostView = {
+  ...hostReveal,
+  tally: WRONG_TALLY,
+  caught: false,
+};
+
+/** Dov and Priya tie; nobody can be caught on a tie. */
+const hostRevealTie: ImposterHostView = {
+  ...hostReveal,
+  tally: TIE_TALLY,
+  caught: false,
+};
+
+/** Nobody voted at all. */
+const hostRevealNoVotes: ImposterHostView = {
+  ...hostReveal,
+  tally: {},
+  caught: false,
+};
+
+/**
+ * A unanimous vote for `hostResult`, distinct from `hostReveal`'s own `TALLY` (Leo votes Dov
+ * there): once both settle to their real end state (see the note on `RESULT_PREVIEW_DEADLINE`),
+ * a caught-and-missed result that inherits the exact same tally, crew word, guess and points as
+ * `hostResultCaughtNope` below is pixel-identical to it, and `distinct-previews.spec.ts` catches
+ * it -- two labels, the same screen. Every crew member spotting Priya collapses the "spotted"
+ * reason into one row instead of splitting Leo off into his own "voted Dov" row.
+ */
+const RESULT_TALLY = {
+  [PRIYA]: [MAYA, DOV, SAM, NOA, LEO],
+} satisfies Record<PlayerId, PlayerId[]>;
+
+/** Matches `RESULT_TALLY`: every crew member spotted Priya and shares the vote bonus. */
+const POINTS_THIS_WORD_RESULT = {
+  [MAYA]: 500,
+  [DOV]: 500,
+  [SAM]: 500,
+  [NOA]: 500,
+  [PRIYA]: 0,
+  [LEO]: 500,
+} satisfies Record<PlayerId, number>;
+
+const hostResult: ImposterHostView = {
+  ...hostReveal,
+  phase: "result",
+  tally: RESULT_TALLY,
+  crewWord: CREW_WORD,
+  guess: "horse",
+  guessCorrect: false,
+  pointsThisWord: POINTS_THIS_WORD_RESULT,
+};
+
+/** Priya was caught and missed the guess, a settled render for the result moment. */
+const hostResultCaughtNope: ImposterHostView = {
+  ...hostReveal,
+  phase: "result",
+  crewWord: CREW_WORD,
+  guess: "HORSE",
+  guessCorrect: false,
+  pointsThisWord: POINTS_THIS_WORD,
+};
+
+const POINTS_THIS_WORD_STOLEN = {
+  [MAYA]: 0,
+  [DOV]: 0,
+  [SAM]: 0,
+  [NOA]: 0,
+  [PRIYA]: 1000,
+  [LEO]: 0,
+} satisfies Record<PlayerId, number>;
+
+/** Priya was caught but stole the word back with a correct guess. */
+const hostResultCaughtGotIt: ImposterHostView = {
+  ...hostReveal,
+  phase: "result",
+  crewWord: CREW_WORD,
+  guess: "GIRAFFE",
+  guessCorrect: true,
+  pointsThisWord: POINTS_THIS_WORD_STOLEN,
+};
+
+const POINTS_THIS_WORD_ESCAPED = {
+  [MAYA]: 0,
+  [DOV]: 0,
+  [SAM]: 0,
+  [NOA]: 0,
+  [PRIYA]: 1000,
+  [LEO]: 0,
+} satisfies Record<PlayerId, number>;
+
+/** Priya got away with it: no guess line, straight to points and standings. */
+const hostResultEscaped: ImposterHostView = {
+  ...hostRevealWrong,
+  phase: "result",
+  crewWord: CREW_WORD,
+  guess: null,
+  guessCorrect: null,
+  pointsThisWord: POINTS_THIS_WORD_ESCAPED,
+};
+
+const PLAYER_BASE = {
+  wordNumber: 3,
+  wordCount: 6,
+  clueOrder: CLUE_ORDER,
+  voteCandidates: [MAYA, PRIYA, SAM, NOA, LEO],
+  votedCount: VOTED_IDS.length,
+  totals: TOTALS,
+  turnStartedAt: SERVER_NOW,
+};
+
+/** Maya, crew, reading her secret word during word-check. */
+const phoneCrewCard: ImposterPlayerView = {
+  ...PLAYER_BASE,
+  phase: "word-check",
+  role: "crew",
+  word: CREW_WORD,
+  currentSpeakerId: null,
+  isMyTurn: false,
+  nextSpeakerId: null,
+  myVote: null,
+  imposterId: null,
+  caught: null,
+  isMyLastChance: false,
+  decoyWord: null,
+  myGuess: null,
+  crewWord: null,
+  guess: null,
+  guessCorrect: null,
+  myPoints: null,
+};
+
+/** Priya, the imposter, reading her decoy word. */
+const phoneImposterCard: ImposterPlayerView = {
+  ...phoneCrewCard,
+  role: "imposter",
+  word: DECOY_WORD,
+};
+
+/** Dov's turn to give a clue. */
+const phoneYourTurn: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "clues",
+  word: CREW_WORD,
+  currentSpeakerId: DOV,
+  isMyTurn: true,
+  nextSpeakerId: PRIYA,
+};
+
+/** Dov picking someone to vote for. */
+const phoneVoteSelecting: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "vote",
+  word: null,
+  currentSpeakerId: null,
+  myVote: null,
+};
+
+/** Dov's vote is locked in on Priya. */
+const phoneVoteLocked: ImposterPlayerView = {
+  ...phoneVoteSelecting,
+  myVote: PRIYA,
+};
+
+/** Dov sees who the imposter was. */
+const phoneReveal: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "reveal",
+  word: null,
+  myVote: PRIYA,
+  imposterId: PRIYA,
+  caught: true,
+};
+
+/** Leo voted for Dov; the crew still caught Priya. */
+const phoneLeoReveal: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "reveal",
+  word: null,
+  myVote: DOV,
+  imposterId: PRIYA,
+  caught: true,
+};
+
+/** Priya's last chance to guess the crew word. */
+const phoneLastChance: ImposterPlayerView = {
+  /** Priya's last chance to guess the crew word. */
+  ...phoneCrewCard,
+  phase: "last-chance",
+  role: "imposter",
+  word: null,
+  myVote: LEO,
+  imposterId: PRIYA,
+  caught: true,
+  isMyLastChance: true,
+  decoyWord: DECOY_WORD,
+  myGuess: null,
+};
+
+/** Dov watches Priya guess. */
+const phoneWaitingForGuess: ImposterPlayerView = {
+  ...phoneLastChance,
+  role: "crew",
+  isMyLastChance: false,
+  decoyWord: null,
+};
+
+/** Priya watches Dov's clue, and she is up next. */
+const phoneWatchingClue: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "clues",
+  role: "imposter",
+  word: DECOY_WORD,
+  currentSpeakerId: DOV,
+  isMyTurn: false,
+  nextSpeakerId: PRIYA,
+};
+
+/** Sam watches Dov's clue and waits two seats out. */
+const phoneWatchingClueLater: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "clues",
+  word: CREW_WORD,
+  currentSpeakerId: DOV,
+  isMyTurn: false,
+  nextSpeakerId: PRIYA,
+};
+
+/** Priya sees the crew caught her. */
+const phoneImposterReveal: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "reveal",
+  role: "imposter",
+  word: null,
+  myVote: LEO,
+  imposterId: PRIYA,
+  caught: true,
+};
+
+/** Priya got away with it. */
+const phoneImposterRevealFree: ImposterPlayerView = {
+  ...phoneImposterReveal,
+  caught: false,
+};
+
+/** Priya's result after a last-chance guess that landed. */
+const phoneImposterResult: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "result",
+  role: "imposter",
+  word: null,
+  myVote: LEO,
+  imposterId: PRIYA,
+  caught: true,
+  crewWord: CREW_WORD,
+  guess: "horse",
+  guessCorrect: true,
+  myPoints: 1000,
+};
+
+/** Dov sees the word and his points after the guess. */
+const phoneResult: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "result",
+  word: null,
+  myVote: PRIYA,
+  imposterId: PRIYA,
+  caught: true,
+  crewWord: CREW_WORD,
+  guess: "horse",
+  guessCorrect: false,
+  myPoints: 500,
+};
+
+/** Priya stole the word back with a correct last-chance guess. */
+const phoneResultStole: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "result",
+  role: "imposter",
+  word: null,
+  myVote: LEO,
+  imposterId: PRIYA,
+  caught: true,
+  crewWord: CREW_WORD,
+  guess: "GIRAFFE",
+  guessCorrect: true,
+  myPoints: 1000,
+};
+
+/** Priya was caught and missed the guess. */
+const phoneResultNope: ImposterPlayerView = {
+  ...phoneResultStole,
+  guess: "HORSE",
+  guessCorrect: false,
+  myPoints: 0,
+};
+
+/** Dov voted for Priya and gets the spotter bonus. */
+const phoneResultSpotted: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "result",
+  word: null,
+  myVote: PRIYA,
+  imposterId: PRIYA,
+  caught: true,
+  crewWord: CREW_WORD,
+  guess: "HORSE",
+  guessCorrect: false,
+  myPoints: 500,
+};
+
+/** Leo did not vote for Priya, so he gets nothing for the catch. */
+const phoneResultMissed: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "result",
+  word: null,
+  myVote: DOV,
+  imposterId: PRIYA,
+  caught: true,
+  crewWord: CREW_WORD,
+  guess: "HORSE",
+  guessCorrect: false,
+  myPoints: 0,
+};
+
+/** Priya got away with it. */
+const phoneResultEscapedImposter: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "result",
+  role: "imposter",
+  word: null,
+  myVote: LEO,
+  imposterId: PRIYA,
+  caught: false,
+  crewWord: CREW_WORD,
+  guess: null,
+  guessCorrect: null,
+  myPoints: 1000,
+};
+
+/** Dov watches the imposter get away. */
+const phoneResultEscapedCrew: ImposterPlayerView = {
+  ...phoneCrewCard,
+  phase: "result",
+  word: null,
+  myVote: PRIYA,
+  imposterId: PRIYA,
+  caught: false,
+  crewWord: CREW_WORD,
+  guess: null,
+  guessCorrect: null,
+  myPoints: 0,
+};
+
+interface RoomExtras {
+  timerStartedAt?: number | null;
+  /** The host view a no-TV phone stages alongside `view`; null for a shared-screen preview. */
+  stage?: ImposterHostView | null;
+  /** The room's cast, when it is not the usual six. */
+  players?: PlayerSummary[];
+}
+
+function commonRoom(
+  view: ImposterHostView | ImposterPlayerView,
+  deadline: number | null,
+  extras: RoomExtras = {},
+) {
+  const { timerStartedAt = null, stage = null, players = PLAYERS } = extras;
+  return {
+    code: "BKTZ",
+    sharedScreen: stage === null,
+    phase: "in-game" as const,
+    lobbyScreen: "join" as const,
+    players,
+    vipId: players[0]?.id ?? MAYA,
+    locked: false,
+    games: [],
+    selectedGameId: "imposter",
+    packs: [],
+    lastResult: null,
+    game: { id: "imposter", view, stage, deadline, timerStartedAt },
+    serverNow: SERVER_NOW,
+    contentLanguage: "en" as const,
+  };
+}
+
+function hostRoom(
+  view: ImposterHostView,
+  deadline: number | null,
+  timerStartedAt: number | null = null,
+  players: PlayerSummary[] = PLAYERS,
+): HostRoomView {
+  return {
+    role: "host",
+    ...commonRoom(view, deadline, { timerStartedAt, players }),
+  };
+}
+
+type PlayerRoomTiming = RoomExtras;
+
+function playerRoom(
+  view: ImposterPlayerView,
+  you: PlayerId,
+  deadline: number | null,
+  timing: PlayerRoomTiming = {},
+): PlayerRoomView {
+  return {
+    role: "player",
+    you,
+    ...commonRoom(view, deadline, timing),
+  };
+}
+
+
+// ---------- Worst case ----------
+//
+// The layout suite measures these, so they carry the most punishing content the game can
+// actually serve: the longest word any imposter pack ships, and a full room of players whose
+// names all sit at the protocol's limit. scripts/content-stress.test.ts fails when a pack
+// ships something longer, so new content re-arms these fixtures instead of slipping past.
+
+/**
+ * The word fitTextSize (packages/ui/src/text-fit.ts) actually sizes from: crew/decoy renders
+ * through it, and it only ever looks at the longest single word in the text, so a two-word pair
+ * like "flight attendant" is really governed by "attendant" (9 characters) alone — the space and
+ * "flight" don't matter to it. "thunderstorm" is a single 12-character word already shipped in
+ * packs/imposter/nature-and-weather.json, longer than "attendant" and than every other word any
+ * imposter pack ships, so it's the fixture: no compound needed; this one word already is the
+ * worst case. `scripts/content-stress.test.ts` holds this against the packs by character count
+ * of the longest word (not the longest whole value — comparing whole values missed this one,
+ * since "flight attendant" is 17 characters end to end and looked worse than "thunderstorm"'s
+ * 12 even though its own longest word is shorter); `e2e/layout/content-width.spec.ts` holds it
+ * by rendered width in the real font.
+ */
+export const STRESS_TEXT = "thunderstorm";
+
+/** Eight players, the room ceiling, each named at NAME_MAX_LENGTH. */
+const STRESS_NAMES = [
+  "Wilhelmina A",
+  "Wilhelmina B",
+  "Wilhelmina C",
+  "Wilhelmina D",
+  "Wilhelmina E",
+  "Wilhelmina F",
+  "Wilhelmina G",
+  "Wilhelmina H",
+];
+
+const STRESS_AVATARS: AvatarId[] = [
+  "star",
+  "toast",
+  "drop",
+  "cloud",
+  "cat",
+  "mushroom",
+  "ghost",
+  "robot",
+];
+
+const STRESS_PLAYERS: PlayerSummary[] = STRESS_NAMES.map((name, index) =>
+  player(`stress-${index}`, name, STRESS_AVATARS[index] ?? "star", {
+    crowns: index % 3,
+    isVip: index === 0,
+  }),
+);
+
+const STRESS_IDS: PlayerId[] = STRESS_PLAYERS.map((each) => each.id);
+const STRESS_TOTALS: Record<PlayerId, number> = Object.fromEntries(
+  STRESS_PLAYERS.map((each, index) => [each.id, 1500 - index * 100]),
+);
+const STRESS_SPEAKER = "stress-1";
+const STRESS_NEXT = "stress-2";
+
+const stressHostClues: ImposterHostView = {
+  ...hostClues,
+  playerIds: STRESS_IDS,
+  clueOrder: STRESS_IDS,
+  totals: STRESS_TOTALS,
+  currentSpeakerId: STRESS_SPEAKER,
+  doneSpeakerIds: ["stress-0"],
+};
+
+const stressHostVote: ImposterHostView = {
+  ...stressHostClues,
+  phase: "vote",
+  currentSpeakerId: null,
+  doneSpeakerIds: STRESS_IDS,
+  votedIds: ["stress-0", "stress-2", "stress-3"],
+};
+
+/**
+ * Seven of eight vote out the first player to join, who is a crew member: the leftmost tile
+ * carries both the longest tally ("7 votes", seven scratches, "+3" voters) and the long
+ * "Not the imposter" stamp, while the real imposter's stamp lands on the tile beside it.
+ */
+const stressHostRevealWrong: ImposterHostView = {
+  ...hostReveal,
+  playerIds: STRESS_IDS,
+  clueOrder: STRESS_IDS,
+  totals: STRESS_TOTALS,
+  doneSpeakerIds: STRESS_IDS,
+  votedIds: STRESS_IDS,
+  tally: {
+    "stress-0": STRESS_IDS.slice(1),
+    "stress-1": ["stress-0"],
+  },
+  imposterId: "stress-1",
+  caught: false,
+};
+
+/** The screen from #24: the imposter reading a long decoy word on their own turn. */
+const stressPhoneImposterTurn: ImposterPlayerView = {
+  ...phoneYourTurn,
+  role: "imposter",
+  word: STRESS_TEXT,
+  clueOrder: STRESS_IDS,
+  voteCandidates: STRESS_IDS,
+  totals: STRESS_TOTALS,
+  currentSpeakerId: STRESS_SPEAKER,
+  nextSpeakerId: STRESS_NEXT,
+};
+
+const stressPhoneCrewCard: ImposterPlayerView = {
+  ...stressPhoneImposterTurn,
+  phase: "word-check",
+  role: "crew",
+  isMyTurn: false,
+  currentSpeakerId: null,
+  nextSpeakerId: null,
+};
+
+const stressPhoneVote: ImposterPlayerView = {
+  ...stressPhoneImposterTurn,
+  phase: "vote",
+  isMyTurn: false,
+  currentSpeakerId: null,
+  nextSpeakerId: null,
+  votedCount: 3,
+};
+
+export const imposterPreviews: Array<{
+  label: string;
+  surface: "host" | "phone";
+  view: ImposterHostView | ImposterPlayerView;
+  room: HostRoomView | PlayerRoomView;
+}> = [
+  {
+    label: "Host: check your phones",
+    surface: "host",
+    view: hostWordCheck,
+    room: hostRoom(hostWordCheck, WORD_CHECK_DEADLINE),
+  },
+  {
+    label: "Host: clues",
+    surface: "host",
+    view: hostClues,
+    room: hostRoom(hostClues, CLUES_DEADLINE),
+  },
+  {
+    label: "Host: vote",
+    surface: "host",
+    view: hostVote,
+    room: hostRoom(hostVote, VOTE_DEADLINE),
+  },
+  // No `timerStartedAt` on any of these four: the dev gallery freezes its clock at
+  // `timerStartedAt ?? serverNow` (apps/web/src/dev/screens.ts), and the reveal's own beat
+  // anchor (`anchorAt`) prefers that same `timerStartedAt` when one is given. Setting it
+  // directly pins both to the same instant, so `elapsed` is always 0 -- the intro beat,
+  // forever, whatever the fixture claims to show. Passing only `REVEAL_DEADLINE` lets the
+  // anchor fall back to `deadline - REVEAL_MS`, which still equals `REVEAL_PREVIEW_START`
+  // (REVEAL_DEADLINE is `SERVER_NOW + 1000`), but the frozen clock now reads `serverNow`
+  // instead -- 11s apart from the anchor, so these four actually land on the settled verdict
+  // their labels promise instead of the teaser that plays before it.
+  {
+    label: "Host: reveal",
+    surface: "host",
+    view: hostReveal,
+    room: hostRoom(hostReveal, REVEAL_DEADLINE),
+  },
+  {
+    label: "Host: reveal wrong",
+    surface: "host",
+    view: hostRevealWrong,
+    room: hostRoom(hostRevealWrong, REVEAL_DEADLINE),
+  },
+  {
+    label: "Host: reveal tie",
+    surface: "host",
+    view: hostRevealTie,
+    room: hostRoom(hostRevealTie, REVEAL_DEADLINE),
+  },
+  {
+    label: "Host: reveal no votes",
+    surface: "host",
+    view: hostRevealNoVotes,
+    room: hostRoom(hostRevealNoVotes, REVEAL_DEADLINE),
+  },
+  {
+    label: "Host: last chance",
+    surface: "host",
+    view: hostLastChance,
+    room: hostRoom(hostLastChance, LAST_CHANCE_DEADLINE),
+  },
+  {
+    label: "Host: last chance typing",
+    surface: "host",
+    view: hostLastChance,
+    room: hostRoom(hostLastChance, LAST_CHANCE_TYPING_DEADLINE),
+  },
+  // No `timerStartedAt` on any of these four -- same freeze as the reveal family above.
+  // `RESULT_PREVIEW_DEADLINE - RESULT_CAUGHT_MS` reproduces `RESULT_PREVIEW_START` for the
+  // caught path exactly, same as it always did for the "settled" trio; using it for the plain
+  // "Host: result" too (in place of `RESULT_DEADLINE`, which only ever mattered for the
+  // Timer's own countdown display, not for the beat anchor) lands it on the same fully-settled
+  // state instead of stopping partway through at the "count" beat.
+  {
+    label: "Host: result",
+    surface: "host",
+    view: hostResult,
+    room: hostRoom(hostResult, RESULT_PREVIEW_DEADLINE),
+  },
+  {
+    label: "Host: result caught nope",
+    surface: "host",
+    view: hostResultCaughtNope,
+    room: hostRoom(hostResultCaughtNope, RESULT_PREVIEW_DEADLINE),
+  },
+  {
+    label: "Host: result caught got it",
+    surface: "host",
+    view: hostResultCaughtGotIt,
+    room: hostRoom(hostResultCaughtGotIt, RESULT_PREVIEW_DEADLINE),
+  },
+  {
+    label: "Host: result escaped",
+    surface: "host",
+    view: hostResultEscaped,
+    room: hostRoom(hostResultEscaped, RESULT_PREVIEW_DEADLINE_ESCAPED),
+  },
+  {
+    label: "Phone: Maya crew card",
+    surface: "phone",
+    view: phoneCrewCard,
+    room: playerRoom(phoneCrewCard, MAYA, WORD_CHECK_DEADLINE),
+  },
+  {
+    label: "Phone: Priya imposter card",
+    surface: "phone",
+    view: phoneImposterCard,
+    room: playerRoom(phoneImposterCard, PRIYA, WORD_CHECK_DEADLINE),
+  },
+  {
+    label: "Phone: Dov your turn",
+    surface: "phone",
+    view: phoneYourTurn,
+    room: playerRoom(phoneYourTurn, DOV, CLUES_DEADLINE),
+  },
+  {
+    label: "Phone: Dov vote selecting",
+    surface: "phone",
+    view: phoneVoteSelecting,
+    room: playerRoom(phoneVoteSelecting, DOV, VOTE_DEADLINE),
+  },
+  {
+    label: "Phone: Dov vote locked in",
+    surface: "phone",
+    view: phoneVoteLocked,
+    room: playerRoom(phoneVoteLocked, DOV, VOTE_DEADLINE),
+  },
+  // No `timerStartedAt` here either -- see the comment on the Host reveal family above. These
+  // two used to freeze on the intro beat and render "The votes are in… 0:12 Eyes on the TV",
+  // identical to "Priya reveal caught"/"Priya reveal free" below; dropping it lands each on the
+  // personal beat its own label names.
+  {
+    label: "Phone: Dov reveal",
+    surface: "phone",
+    view: phoneReveal,
+    room: playerRoom(phoneReveal, DOV, REVEAL_DEADLINE),
+  },
+  {
+    label: "Phone: Leo reveal",
+    surface: "phone",
+    view: phoneLeoReveal,
+    room: playerRoom(phoneLeoReveal, LEO, REVEAL_DEADLINE),
+  },
+  {
+    label: "Phone: Priya last chance",
+    surface: "phone",
+    view: phoneLastChance,
+    room: playerRoom(phoneLastChance, PRIYA, LAST_CHANCE_DEADLINE),
+  },
+  {
+    label: "Phone: Dov waiting for guess",
+    surface: "phone",
+    view: phoneWaitingForGuess,
+    room: playerRoom(phoneWaitingForGuess, DOV, LAST_CHANCE_DEADLINE),
+  },
+  {
+    label: "Phone: Priya watching Dov's clue",
+    surface: "phone",
+    view: phoneWatchingClue,
+    room: playerRoom(phoneWatchingClue, PRIYA, CLUES_DEADLINE),
+  },
+  {
+    label: "Phone: Sam watching Dov's clue",
+    surface: "phone",
+    view: phoneWatchingClueLater,
+    room: playerRoom(phoneWatchingClueLater, SAM, CLUES_DEADLINE),
+  },
+  {
+    label: "Phone: Priya reveal caught",
+    surface: "phone",
+    view: phoneImposterReveal,
+    room: playerRoom(phoneImposterReveal, PRIYA, REVEAL_DEADLINE),
+  },
+  {
+    label: "Phone: Priya reveal free",
+    surface: "phone",
+    view: phoneImposterRevealFree,
+    room: playerRoom(phoneImposterRevealFree, PRIYA, REVEAL_DEADLINE),
+  },
+  {
+    label: "Phone: Priya result",
+    surface: "phone",
+    view: phoneImposterResult,
+    room: playerRoom(phoneImposterResult, PRIYA, RESULT_DEADLINE),
+  },
+  {
+    label: "Phone: Dov result",
+    surface: "phone",
+    view: phoneResult,
+    room: playerRoom(phoneResult, DOV, RESULT_DEADLINE),
+  },
+  // No `timerStartedAt` on any of these six -- same freeze as the reveal family above, this
+  // time on the result ceremony. `RESULT_PREVIEW_DEADLINE` (`SERVER_NOW + 2000`) minus each
+  // path's own duration reproduces `RESULT_PREVIEW_START` for the caught pair (14s duration)
+  // and lands past the escaped path's own settle beat at 5.5s (9s duration - 2s = 7s elapsed),
+  // so every one of these six lands on the settled result its label promises.
+  {
+    label: "Phone: Priya result stole",
+    surface: "phone",
+    view: phoneResultStole,
+    room: playerRoom(phoneResultStole, PRIYA, RESULT_PREVIEW_DEADLINE),
+  },
+  {
+    label: "Phone: Priya result nope",
+    surface: "phone",
+    view: phoneResultNope,
+    room: playerRoom(phoneResultNope, PRIYA, RESULT_PREVIEW_DEADLINE),
+  },
+  {
+    label: "Phone: Dov result spotted",
+    surface: "phone",
+    view: phoneResultSpotted,
+    room: playerRoom(phoneResultSpotted, DOV, RESULT_PREVIEW_DEADLINE),
+  },
+  {
+    label: "Phone: Leo result missed",
+    surface: "phone",
+    view: phoneResultMissed,
+    room: playerRoom(phoneResultMissed, LEO, RESULT_PREVIEW_DEADLINE),
+  },
+  {
+    label: "Phone: Priya result escaped",
+    surface: "phone",
+    view: phoneResultEscapedImposter,
+    room: playerRoom(phoneResultEscapedImposter, PRIYA, RESULT_PREVIEW_DEADLINE_ESCAPED),
+  },
+  {
+    label: "Phone: Dov result escaped",
+    surface: "phone",
+    view: phoneResultEscapedCrew,
+    room: playerRoom(phoneResultEscapedCrew, DOV, RESULT_PREVIEW_DEADLINE_ESCAPED),
+  },
+  {
+    label: "Phone (no-TV): Maya crew card",
+    surface: "phone",
+    view: phoneCrewCard,
+    room: playerRoom(phoneCrewCard, MAYA, WORD_CHECK_DEADLINE, {
+      stage: hostWordCheck,
+    }),
+  },
+  {
+    label: "Phone (no-TV): Dov your turn",
+    surface: "phone",
+    view: phoneYourTurn,
+    room: playerRoom(phoneYourTurn, DOV, CLUES_DEADLINE, { stage: hostClues }),
+  },
+  {
+    label: "Phone (no-TV): Priya watching Dov's clue",
+    surface: "phone",
+    view: phoneWatchingClue,
+    room: playerRoom(phoneWatchingClue, PRIYA, CLUES_DEADLINE, {
+      stage: hostClues,
+    }),
+  },
+  {
+    label: "Phone (no-TV): Dov vote selecting",
+    surface: "phone",
+    view: phoneVoteSelecting,
+    room: playerRoom(phoneVoteSelecting, DOV, VOTE_DEADLINE, { stage: hostVote }),
+  },
+  {
+    label: "Phone (no-TV): Dov vote locked in",
+    surface: "phone",
+    view: phoneVoteLocked,
+    room: playerRoom(phoneVoteLocked, DOV, VOTE_DEADLINE, { stage: hostVote }),
+  },
+  // No `timerStartedAt` -- same freeze as the reveal family above. This is the one screen the
+  // layout suite has to exercise the no-TV stage's own decoy-word reveal and voter avatars on;
+  // frozen at the intro beat, it never rendered either.
+  {
+    label: "Phone (no-TV): Dov reveal settled",
+    surface: "phone",
+    view: phoneReveal,
+    room: playerRoom(phoneReveal, DOV, REVEAL_DEADLINE, {
+      stage: hostReveal,
+    }),
+  },
+  {
+    label: "Phone (no-TV): Priya last chance",
+    surface: "phone",
+    view: phoneLastChance,
+    room: playerRoom(phoneLastChance, PRIYA, LAST_CHANCE_DEADLINE, {
+      stage: hostLastChance,
+    }),
+  },
+  {
+    label: "Phone (no-TV): Dov waiting for guess",
+    surface: "phone",
+    view: phoneWaitingForGuess,
+    room: playerRoom(phoneWaitingForGuess, DOV, LAST_CHANCE_DEADLINE, {
+      stage: hostLastChance,
+    }),
+  },
+  // No `timerStartedAt` -- same freeze as the result family above.
+  {
+    label: "Phone (no-TV): Dov result settled",
+    surface: "phone",
+    view: phoneResult,
+    room: playerRoom(phoneResult, DOV, RESULT_PREVIEW_DEADLINE, {
+      stage: hostResultCaughtNope,
+    }),
+  },
+  {
+    label: "Phone: worst case, imposter turn (long word, 8 long names)",
+    surface: "phone",
+    view: stressPhoneImposterTurn,
+    room: playerRoom(stressPhoneImposterTurn, STRESS_SPEAKER, CLUES_DEADLINE, {
+      players: STRESS_PLAYERS,
+    }),
+  },
+  {
+    label: "Phone: worst case, crew card (long word, 8 long names)",
+    surface: "phone",
+    view: stressPhoneCrewCard,
+    room: playerRoom(stressPhoneCrewCard, STRESS_SPEAKER, WORD_CHECK_DEADLINE, {
+      players: STRESS_PLAYERS,
+    }),
+  },
+  {
+    label: "Phone: worst case, vote (8 long names)",
+    surface: "phone",
+    view: stressPhoneVote,
+    room: playerRoom(stressPhoneVote, STRESS_SPEAKER, VOTE_DEADLINE, {
+      players: STRESS_PLAYERS,
+    }),
+  },
+  {
+    label: "Host: worst case, clue turns (8 long names)",
+    surface: "host",
+    view: stressHostClues,
+    room: hostRoom(stressHostClues, CLUES_DEADLINE, null, STRESS_PLAYERS),
+  },
+  {
+    label: "Host: worst case, voting (8 long names)",
+    surface: "host",
+    view: stressHostVote,
+    room: hostRoom(stressHostVote, VOTE_DEADLINE, null, STRESS_PLAYERS),
+  },
+  {
+    label: "Host: worst case, reveal wrong (7 votes on the first of 8 players)",
+    surface: "host",
+    view: stressHostRevealWrong,
+    room: hostRoom(stressHostRevealWrong, REVEAL_DEADLINE, null, STRESS_PLAYERS),
+  },
+];
+
+const REVEAL_PHONES = [
+  "Phone: Dov reveal",
+  "Phone: Leo reveal",
+  "Phone: Priya reveal caught",
+  "Phone: Priya reveal free",
+];
+const RESULT_PHONES = [
+  "Phone: Priya result",
+  "Phone: Dov result",
+  "Phone: Priya result stole",
+  "Phone: Priya result nope",
+  "Phone: Dov result spotted",
+  "Phone: Leo result missed",
+  "Phone: Priya result escaped",
+  "Phone: Dov result escaped",
+];
+
+function revealMoment(host: string, chip: string): PreviewMoment {
+  return {
+    host,
+    chip,
+    durationMs: REVEAL_MS,
+    phones: REVEAL_PHONES,
+    noTvPhones: ["Phone (no-TV): Dov reveal settled"],
+  };
+}
+
+function resultMoment(host: string, chip: string, view: ImposterHostView): PreviewMoment {
+  return {
+    host,
+    chip,
+    durationMs: resultDurationMs(view.caught),
+    phones: RESULT_PHONES,
+    noTvPhones: ["Phone (no-TV): Dov result settled"],
+  };
+}
+
+/** The reveal, last-chance and result previews `/dev/moments` replays, in picker order. */
+export const imposterMoments: PreviewMoment[] = [
+  revealMoment("Host: reveal", "caught"),
+  revealMoment("Host: reveal wrong", "wrong"),
+  revealMoment("Host: reveal tie", "tie"),
+  revealMoment("Host: reveal no votes", "no votes"),
+  {
+    host: "Host: last chance typing",
+    chip: "typing",
+    durationMs: LAST_CHANCE_MS,
+    phones: ["Phone: Priya last chance"],
+    noTvPhones: ["Phone (no-TV): Priya last chance"],
+  },
+  resultMoment("Host: result caught got it", "got it", hostResultCaughtGotIt),
+  resultMoment("Host: result caught nope", "nope", hostResultCaughtNope),
+  resultMoment("Host: result escaped", "escaped", hostResultEscaped),
+];

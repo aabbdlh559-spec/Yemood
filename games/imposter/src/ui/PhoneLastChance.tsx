@@ -1,0 +1,421 @@
+// Imposter's own last chance to guess the crew's word, and the crew's waiting screen.
+// The imposter's typing sends only a LENGTH to the TV (never letters), throttled so a fast
+// typist can't flood the room with actions.
+import { useEffect, useRef, useState } from "react";
+import type { PlayerId, PlayerSummary } from "@opg/protocol";
+import type { HeartbeatTempo, ServerClock } from "@opg/ui";
+import {
+  Avatar,
+  Button,
+  EyesOnTv,
+  Highlight,
+  Icon,
+  LinedCard,
+  Marker,
+  PhoneStrip,
+  TextInput,
+  Timer,
+} from "@opg/ui";
+import { format, useLocale } from "@opg/i18n";
+import type { Dictionary } from "@opg/i18n";
+import { MAX_GUESS_LENGTH, POINTS_PER_WORD } from "../state";
+import type { ImposterAction, ImposterHostView, ImposterPlayerView } from "../state";
+import type { SectionProps } from "./Phone";
+import { StageLastChance } from "./stage/LastChance";
+
+/** Last chance's own tempo switch: slow until the final 5 seconds, then fast. */
+const LAST_CHANCE_FAST_MS = 5000;
+
+/** At most one `typing` send per this window; the final length always lands. */
+export const TYPING_THROTTLE_MS = 250;
+
+function findPlayer(
+  players: PlayerSummary[],
+  id: PlayerId | null,
+): PlayerSummary | null {
+  if (!id) return null;
+  return players.find((player) => player.id === id) ?? null;
+}
+
+function nameOf(players: PlayerSummary[], id: PlayerId | null, someone: string): string {
+  return findPlayer(players, id)?.name ?? someone;
+}
+
+function money(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
+function avatarAlt(t: Dictionary, me: PlayerSummary | null): string | undefined {
+  return me === null ? undefined : format(t.imposter.avatarAlt, { name: me.name });
+}
+
+function meName(t: Dictionary, me: PlayerSummary | null): string {
+  return me?.name ?? t.imposter.meFallback;
+}
+
+function meAvatarId(me: PlayerSummary | null) {
+  return me?.avatar ?? null;
+}
+
+function MeRow({ me }: { me: PlayerSummary | null }) {
+  const { t } = useLocale();
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <Avatar id={meAvatarId(me)} size={50} alt={avatarAlt(t, me)} />
+      <div style={{ fontSize: 21, fontWeight: 700 }}>{meName(t, me)}</div>
+    </div>
+  );
+}
+
+export interface ThrottleState {
+  lastSentAt: number;
+  pending: number | null;
+}
+
+export function initialThrottleState(): ThrottleState {
+  return { lastSentAt: -Infinity, pending: null };
+}
+
+export interface ThrottleStepInput {
+  state: ThrottleState;
+  length: number;
+  now: number;
+  intervalMs: number;
+  /** Whether a trailing timeout from an earlier update is already scheduled. */
+  timerScheduled: boolean;
+}
+
+export interface ThrottleStepResult {
+  state: ThrottleState;
+  /** Send this length now, or null when this update is being throttled. */
+  sendNow: number | null;
+  /** Schedule a new trailing timeout for this many ms, or null to reuse one already running. */
+  scheduleDelayMs: number | null;
+}
+
+/**
+ * Pure trailing-throttle step. At most one send per `intervalMs`; a throttled update is
+ * remembered as `pending` so the caller's already-scheduled timeout can flush it later.
+ */
+export function throttleStep(input: ThrottleStepInput): ThrottleStepResult {
+  const { state, length, now, intervalMs, timerScheduled } = input;
+  const elapsed = now - state.lastSentAt;
+  if (elapsed >= intervalMs) {
+    return {
+      state: { lastSentAt: now, pending: null },
+      sendNow: length,
+      scheduleDelayMs: null,
+    };
+  }
+  const nextState = { ...state, pending: length };
+  if (timerScheduled) {
+    return { state: nextState, sendNow: null, scheduleDelayMs: null };
+  }
+  return {
+    state: nextState,
+    sendNow: null,
+    scheduleDelayMs: intervalMs - elapsed,
+  };
+}
+
+interface TypingSenderOptions {
+  send: (action: ImposterAction) => void;
+  clock: ServerClock;
+  disabled: boolean;
+}
+
+/** Sends `{ type: "typing", length }` on a trailing throttle; never sends once disabled. */
+function useTypingSender(options: TypingSenderOptions): (length: number) => void {
+  const stateRef = useRef<ThrottleState>(initialThrottleState());
+  const timeoutRef = useRef<number | null>(null);
+  const liveRef = useRef(options);
+  useEffect(() => {
+    liveRef.current = options;
+  });
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  return (length: number) => {
+    const { send, clock, disabled } = liveRef.current;
+    if (disabled) return;
+    const result = throttleStep({
+      state: stateRef.current,
+      length,
+      now: clock.now(),
+      intervalMs: TYPING_THROTTLE_MS,
+      timerScheduled: timeoutRef.current !== null,
+    });
+    stateRef.current = result.state;
+    if (result.sendNow !== null) {
+      send({ type: "typing", length: result.sendNow });
+      return;
+    }
+    if (result.scheduleDelayMs !== null) {
+      timeoutRef.current = window.setTimeout(() => {
+        timeoutRef.current = null;
+        const pending = stateRef.current.pending;
+        stateRef.current = { ...stateRef.current, pending: null };
+        // Re-check disabled/submitted here: the guess may have been sent (or the phase may
+        // have moved on) between scheduling this trailing send and it firing.
+        if (pending === null || liveRef.current.disabled) return;
+        stateRef.current = {
+          lastSentAt: liveRef.current.clock.now(),
+          pending: null,
+        };
+        liveRef.current.send({ type: "typing", length: pending });
+      }, result.scheduleDelayMs);
+    }
+  };
+}
+
+function GuessForm({
+  view,
+  send,
+  clock,
+}: {
+  view: ImposterPlayerView;
+  send: (action: ImposterAction) => void;
+  clock: ServerClock;
+}) {
+  const { t } = useLocale();
+  const [text, setText] = useState(view.myGuess ?? "");
+  const [sent, setSent] = useState(view.myGuess !== null);
+  const sendTyping = useTypingSender({ send, clock, disabled: sent });
+  const canSubmit = !sent && text.trim().length > 0;
+  let label = t.imposter.lastChance.submitGuess;
+  if (sent) label = t.imposter.lastChance.guessSent;
+
+  const onChange = (value: string) => {
+    setText(value);
+    sendTyping(Array.from(value).length);
+  };
+
+  return (
+    <>
+      <TextInput
+        label={t.imposter.lastChance.yourGuessLabel}
+        value={text}
+        onChange={onChange}
+        maxLength={MAX_GUESS_LENGTH}
+        placeholder={t.imposter.lastChance.typeCrewWord}
+        disabled={sent}
+      />
+      <Button
+        size="lg"
+        fullWidth
+        disabled={!canSubmit}
+        disabledReason={sent ? t.imposter.lastChance.guessSent : undefined}
+        onClick={() => {
+          send({ type: "guess", text: text.trim() });
+          setSent(true);
+        }}
+      >
+        <span>{label}</span>
+        <Icon name="arrow-right" size={22} color="var(--opg-paper)" />
+      </Button>
+    </>
+  );
+}
+
+/** TV mode's own caught banner and decoy reminder, shown above the guess form. No-TV rooms
+ * carry the same beats (caught banner, tiles, timer) on the stage above instead. */
+function CaughtBanner({ view }: { view: ImposterPlayerView }) {
+  const { t } = useLocale();
+  return (
+    <LinedCard
+      tilt={1}
+      style={{
+        flexGrow: 1,
+        marginTop: 8,
+        paddingBlock: "24px",
+        paddingInlineEnd: 20,
+        paddingInlineStart: 56,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        gap: 18,
+      }}
+    >
+      <Marker
+        size={40}
+        color="var(--opg-marker)"
+        level={1}
+        style={{ transform: "rotate(-3deg)" }}
+      >
+        {t.imposter.lastChance.caughtHeadline}
+      </Marker>
+      <div style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.4 }}>
+        {format(t.imposter.lastChance.caughtDesc, { points: money(POINTS_PER_WORD) })}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "baseline",
+          gap: 8,
+          fontSize: 19,
+        }}
+      >
+        <div style={{ fontWeight: 400 }}>{t.imposter.lastChance.decoyWas}</div>
+        <Highlight style={{ maxWidth: "100%", padding: "0 6px" }}>
+          <strong
+            style={{
+              fontWeight: 700,
+              letterSpacing: "0.04em",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {view.decoyWord ?? "—"}
+          </strong>
+        </Highlight>
+      </div>
+    </LinedCard>
+  );
+}
+
+/** No-TV mode's own decoy reminder: the stage above already carries the caught beat, the
+ * tiles and the timer (see StageLastChance), so all that is missing here is the one thing
+ * that stage never had reason to say -- what the imposter's own decoy word actually was. */
+function DecoyReminder({ view }: { view: ImposterPlayerView }) {
+  const { t } = useLocale();
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "baseline",
+        gap: 8,
+        fontSize: 17,
+      }}
+    >
+      <div style={{ fontWeight: 400 }}>{t.imposter.lastChance.decoyWas}</div>
+      <Highlight style={{ maxWidth: "100%", padding: "0 6px" }}>
+        <strong
+          style={{
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            overflowWrap: "anywhere",
+          }}
+        >
+          {view.decoyWord ?? "—"}
+        </strong>
+      </Highlight>
+    </div>
+  );
+}
+
+/** Stage region: the drain everyone watches, only in a no-TV room. */
+function StageArea({
+  stage,
+  players,
+  deadline,
+  timerStartedAt,
+  clock,
+}: {
+  stage: ImposterHostView | null;
+  players: PlayerSummary[];
+  deadline: number | null;
+  timerStartedAt: number | null;
+  clock: ServerClock;
+}) {
+  if (stage === null) return null;
+  return (
+    <StageLastChance
+      view={stage}
+      players={players}
+      deadline={deadline}
+      timerStartedAt={timerStartedAt}
+      clock={clock}
+    />
+  );
+}
+
+/** The imposter's own last-chance screen: guess the crew's word before time runs out. */
+export function GuessView(props: SectionProps) {
+  const { t } = useLocale();
+  const { view, players, me, deadline, timerStartedAt, clock, send, stage } = props;
+  return (
+    <>
+      <PhoneStrip
+        gameName={t.imposter.title}
+        progress={t.imposter.progress.lastChance}
+        right={
+          <Timer
+            deadline={deadline}
+            clock={clock}
+            startedAt={timerStartedAt}
+            haptics
+          />
+        }
+      />
+      <StageArea
+        stage={stage}
+        players={players}
+        deadline={deadline}
+        timerStartedAt={timerStartedAt}
+        clock={clock}
+      />
+      {stage === null ? <CaughtBanner view={view} /> : <DecoyReminder view={view} />}
+      <GuessForm view={view} send={send} clock={clock} />
+      <MeRow me={me} />
+    </>
+  );
+}
+
+/** Switches from "slow" to "fast" at the 5-second mark, via one timeout — never an interval. */
+function useLastChanceTempo(
+  deadline: number | null,
+  clock: ServerClock,
+): HeartbeatTempo {
+  const [fast, setFast] = useState(false);
+  const clockRef = useRef(clock);
+  useEffect(() => {
+    clockRef.current = clock;
+  });
+  useEffect(() => {
+    if (deadline === null) return undefined;
+    const msToFast = deadline - LAST_CHANCE_FAST_MS - clockRef.current.now();
+    if (msToFast <= 0) {
+      setFast(true);
+      return undefined;
+    }
+    const id = window.setTimeout(() => setFast(true), msToFast);
+    return () => window.clearTimeout(id);
+  }, [deadline]);
+  return fast ? "fast" : "slow";
+}
+
+/** The crew's screen while the imposter guesses: eyes on the TV, tempo rising near the end.
+ * A no-TV room already shows the same drain on its own stage, so there is nothing to wait on. */
+export function GuessWaiting(props: SectionProps) {
+  const { t } = useLocale();
+  const { view, players, deadline, timerStartedAt, clock, stage } = props;
+  const imposter = nameOf(players, view.imposterId, t.common.someone);
+  const tempo = useLastChanceTempo(deadline, clock);
+  return (
+    <>
+      <PhoneStrip
+        gameName={t.imposter.title}
+        progress={t.imposter.progress.lastChance}
+        right={<Timer deadline={deadline} clock={clock} />}
+      />
+      <StageArea
+        stage={stage}
+        players={players}
+        deadline={deadline}
+        timerStartedAt={timerStartedAt}
+        clock={clock}
+      />
+      {stage === null ? (
+        <EyesOnTv
+          title={format(t.imposter.lastChance.guessing, { name: imposter })}
+          detail={t.kit.eyesOnTv.screen}
+          tempo={tempo}
+        />
+      ) : null}
+    </>
+  );
+}

@@ -1,0 +1,404 @@
+// /host/<CODE> — the TV stage. Chooses a screen from phase/lobbyScreen.
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { HostRoomView, RoomPhase, RoomView } from "@opg/protocol";
+import { format, useLocale } from "@opg/i18n";
+import type { Dictionary } from "@opg/i18n";
+import {
+  Card,
+  Marker,
+  PhaseEnter,
+  Stage,
+  TvHeader,
+  playFx,
+  useCue,
+  useMusic,
+  useReducedMotion,
+  useScreenWakeLock,
+} from "@opg/ui";
+import type { ServerClock } from "@opg/ui";
+import { gameUiFor } from "../games";
+import { useRoomGamePreload } from "../useGamePreload";
+import { ApiError, getRoomInfo } from "../api";
+import { Link } from "../router";
+import { useRoomSocket } from "../useRoomSocket";
+import type { RoomSocketError, RoomSocketStatus } from "../useRoomSocket";
+import { screenKey } from "./screen-key";
+import { screenMusic } from "./screen-music";
+import { TvFinalScores } from "./TvFinalScores";
+import { TvGamePicker } from "./TvGamePicker";
+import { TvLobby } from "./TvLobby";
+import { TvReconnecting } from "./TvReconnecting";
+import { TvPage } from "./shared";
+import { withLocalizedGames } from "./localize-games";
+
+function MessageScreen({
+  title,
+  body,
+  t,
+}: {
+  title: string;
+  body: string;
+  t: Dictionary;
+}) {
+  return (
+    <TvPage>
+      <TvHeader variant="brand" />
+      <div
+        style={{
+          flexGrow: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Card
+          variant="L"
+          tilt={-1}
+          style={{
+            padding: "60px 68px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 20,
+            maxWidth: 1100,
+          }}
+        >
+          <Marker size={76} level={1}>{title}</Marker>
+          <div style={{ fontSize: 38, lineHeight: 1.35 }}>{body}</div>
+          <Link to="/" className="opg-link" style={{ fontSize: 30, fontWeight: 700 }}>
+            {t.status.backToStart}
+          </Link>
+        </Card>
+      </div>
+    </TvPage>
+  );
+}
+
+function GameStage({
+  view,
+  gameView,
+  deadline,
+  timerStartedAt,
+  clock,
+  t,
+}: {
+  view: HostRoomView;
+  gameView: unknown;
+  deadline: number | null;
+  timerStartedAt: number | null;
+  clock: ServerClock;
+  t: Dictionary;
+}) {
+  const Ui = gameUiFor(view.game?.id ?? view.selectedGameId);
+  if (!Ui)
+    return (
+      <MessageScreen
+        title={t.status.gameNotFoundTitle}
+        body={t.status.gameNotFoundBody}
+        t={t}
+      />
+    );
+  return (
+    <Ui.Host
+      view={gameView}
+      room={view}
+      deadline={deadline}
+      timerStartedAt={timerStartedAt}
+      clock={clock}
+    />
+  );
+}
+
+function StartingScreen({ view, t }: { view: HostRoomView; t: Dictionary }) {
+  const gameName =
+    view.games.find((g) => g.id === view.selectedGameId)?.name ??
+    t.status.startingGameFallback;
+  const reduced = useReducedMotion();
+  const titleRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    playFx(titleRef.current, "tapeOn", reduced);
+  }, [reduced]);
+  return (
+    <TvPage>
+      <TvHeader variant="brand" />
+      <div
+        style={{
+          flexGrow: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Card
+          variant="L"
+          tilt={-1}
+          style={{
+            padding: "60px 68px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 20,
+            maxWidth: 1100,
+          }}
+        >
+          <div ref={titleRef}>
+            <Marker size={76} level={1}>
+              {format(t.status.startingHeading, { game: gameName })}
+            </Marker>
+          </div>
+          <div style={{ fontSize: 38, lineHeight: 1.35 }}>
+            {t.status.startingBody}
+          </div>
+        </Card>
+      </div>
+    </TvPage>
+  );
+}
+
+function LobbyStage({
+  view,
+  clock,
+}: {
+  view: HostRoomView;
+  clock: ServerClock;
+}) {
+  if (view.lobbyScreen === "pick") {
+    return <TvGamePicker view={view} />;
+  }
+  if (view.lobbyScreen === "results" && view.lastResult) {
+    return <TvFinalScores view={view} clock={clock} />;
+  }
+  return <TvLobby view={view} />;
+}
+
+/** Plays the start stinger the moment the phase becomes "starting", never on mount. */
+function useStartStinger(phase: RoomPhase): void {
+  const cue = useCue();
+  const previousRef = useRef(phase);
+  useEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = phase;
+    if (phase === "starting" && previous !== "starting") cue("jingle-start");
+  }, [phase, cue]);
+}
+
+/** Plays a whoosh on every screen change after the first, keyed by the caller's `key`. */
+function useScreenTransitionCue(key: string): void {
+  const cue = useCue();
+  const previousRef = useRef(key);
+  useEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = key;
+    if (previous !== key) cue("whoosh");
+  }, [key, cue]);
+}
+
+function HostScreen({
+  view,
+  clock,
+  t,
+}: {
+  view: HostRoomView;
+  clock: ServerClock;
+  t: Dictionary;
+}) {
+  if (view.phase !== "lobby") {
+    if (!view.game) return <StartingScreen view={view} t={t} />;
+    return (
+      <GameStage
+        view={view}
+        gameView={view.game.view}
+        deadline={view.game.deadline}
+        timerStartedAt={view.game.timerStartedAt}
+        clock={clock}
+        t={t}
+      />
+    );
+  }
+  return <LobbyStage view={view} clock={clock} />;
+}
+
+function HostStage({
+  view,
+  clock,
+  t,
+}: {
+  view: HostRoomView;
+  clock: ServerClock;
+  t: Dictionary;
+}) {
+  useMusic(screenMusic(view));
+  useRoomGamePreload(view);
+  useStartStinger(view.phase);
+  const key = screenKey(view);
+  useScreenTransitionCue(key);
+  return (
+    // Full height: every game Host sizes itself `height: 100%` of this frame, and the frame is a
+    // block child of the 1080 stage, so without it that resolves to auto and a game whose body
+    // fills the leftover space (Doodle Bluff) collapses to its header.
+    <PhaseEnter phaseKey={key} style={{ height: "100%" }}>
+      <HostScreen view={view} clock={clock} t={t} />
+    </PhaseEnter>
+  );
+}
+
+function connectingBody(status: RoomSocketStatus, t: Dictionary): string {
+  return status === "reconnecting"
+    ? t.status.connectingReconnecting
+    : t.status.connectingFinding;
+}
+
+/** True while a live view is on screen and the socket is reconnecting. */
+function isReconnecting(
+  status: RoomSocketStatus,
+  view: HostRoomView | null,
+): boolean {
+  return status === "reconnecting" && view !== null;
+}
+
+/**
+ * Three outcomes, not two. A browser that blocks site data — Safari's private mode, or a
+ * profile whose storage was cleared — makes `getItem` throw, and folding that into "no token"
+ * told the host their own room was open on another screen and left them no way back. The
+ * distinction is the whole point of this type.
+ */
+type HostTokenRead =
+  | { kind: "found"; token: string }
+  | { kind: "missing" }
+  | { kind: "unreadable" };
+
+function readHostToken(code: string): HostTokenRead {
+  try {
+    const token = localStorage.getItem(`opg:host:${code}`);
+    return token === null ? { kind: "missing" } : { kind: "found", token };
+  } catch {
+    return { kind: "unreadable" };
+  }
+}
+
+function hostViewOf(view: RoomView | null): HostRoomView | null {
+  if (!view) return null;
+  if (view.role !== "host") return null;
+  return view;
+}
+
+/** A host screen only owns the room while its token is stored and still accepted. */
+function ownsRoom(
+  hostToken: string | null,
+  error: RoomSocketError | null,
+): boolean {
+  if (!hostToken) return false;
+  return error?.code !== "host-token-invalid" && error?.code !== "room-not-found";
+}
+
+type RoomProbe = "checking" | "exists" | "missing";
+
+async function probeRoom(code: string): Promise<RoomProbe> {
+  try {
+    await getRoomInfo(code);
+    return "exists";
+  } catch (error) {
+    return error instanceof ApiError && error.code === "not-found" ? "missing" : "exists";
+  }
+}
+
+/** Whether the server knows this room code at all; the host token alone cannot say. */
+function useRoomProbe(code: string): RoomProbe {
+  const [probe, setProbe] = useState<{ code: string; result: RoomProbe }>({
+    code,
+    result: "checking",
+  });
+  useEffect(() => {
+    let live = true;
+    const settle = async () => {
+      const result = await probeRoom(code);
+      if (live) setProbe({ code, result });
+    };
+    void settle();
+    return () => {
+      live = false;
+    };
+  }, [code]);
+  return probe.code === code ? probe.result : "checking";
+}
+
+/**
+ * A screen with no claim on this room: either the code names no room at all, or the room
+ * belongs to the screen that created it. Telling those apart is the point, because "open it on
+ * the other screen" sends someone hunting for a screen that does not exist.
+ */
+function NotYourRoom({ code, t }: { code: string; t: Dictionary }) {
+  const probe = useRoomProbe(code);
+  if (probe === "checking") {
+    return (
+      <MessageScreen
+        title={t.status.connectingTitle}
+        body={t.status.connectingFinding}
+        t={t}
+      />
+    );
+  }
+  if (probe === "missing") {
+    return (
+      <MessageScreen title={t.status.roomGoneTitle} body={t.status.roomGoneBody} t={t} />
+    );
+  }
+  return (
+    <MessageScreen title={t.status.otherHostTitle} body={t.status.otherHostBody} t={t} />
+  );
+}
+
+export function HostApp({ code }: { code: string }) {
+  const { t } = useLocale();
+  const stored = useMemo(() => readHostToken(code), [code]);
+  const hostToken = stored.kind === "found" ? stored.token : null;
+
+  const socket = useRoomSocket({
+    code,
+    role: "host",
+    hostToken,
+    enabled: Boolean(hostToken),
+  });
+  const rawView = hostViewOf(socket.view);
+  const view = useMemo(() => (rawView ? withLocalizedGames(t, rawView) : null), [rawView, t]);
+  const clock = socket.clock;
+
+  useScreenWakeLock(true);
+
+  if (stored.kind === "unreadable") {
+    return (
+      <Stage>
+        <MessageScreen
+          title={t.status.storageBlockedTitle}
+          body={t.status.storageBlockedBody}
+          t={t}
+        />
+      </Stage>
+    );
+  }
+
+  if (!ownsRoom(hostToken, socket.lastError)) {
+    return (
+      <Stage>
+        <NotYourRoom code={code} t={t} />
+      </Stage>
+    );
+  }
+
+  if (!view) {
+    return (
+      <Stage>
+        <MessageScreen
+          title={t.status.connectingTitle}
+          body={connectingBody(socket.status, t)}
+          t={t}
+        />
+      </Stage>
+    );
+  }
+
+  return (
+    <Stage>
+      <HostStage view={view} clock={clock} t={t} />
+      {isReconnecting(socket.status, view) ? <TvReconnecting /> : null}
+    </Stage>
+  );
+}

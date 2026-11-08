@@ -1,0 +1,62 @@
+// @vitest-environment happy-dom
+import { describe, expect, it } from "vitest";
+import type { PlayerSummary } from "@opg/protocol";
+import { render } from "@testing-library/react";
+import { avatarOf, findPlayer, nameOf, PromptText } from "./common";
+
+const MAYA: PlayerSummary = {
+  id: "maya",
+  name: "Maya",
+  avatar: "star",
+  connected: true,
+  isVip: false,
+  crowns: 0,
+  waitingForNextGame: false,
+};
+
+const PLAYERS = [MAYA];
+
+describe("findPlayer", () => {
+  it("finds a player by id", () => {
+    expect(findPlayer(PLAYERS, "maya")).toEqual(MAYA);
+  });
+
+  it("is null for an id with no match", () => {
+    expect(findPlayer(PLAYERS, "ghost")).toBeNull();
+  });
+
+  it("is null for a null id", () => {
+    expect(findPlayer(PLAYERS, null)).toBeNull();
+  });
+});
+
+describe("nameOf", () => {
+  it("returns the matched player's name", () => {
+    expect(nameOf(PLAYERS, "maya", "Someone")).toBe("Maya");
+  });
+
+  it("falls back to the raw id when nobody matches", () => {
+    expect(nameOf(PLAYERS, "ghost", "Someone")).toBe("ghost");
+  });
+
+  it("falls back to the given placeholder for a null id", () => {
+    expect(nameOf(PLAYERS, null, "Someone")).toBe("Someone");
+  });
+});
+
+describe("avatarOf", () => {
+  it("returns the matched player's avatar", () => {
+    expect(avatarOf(PLAYERS, "maya")).toBe("star");
+  });
+
+  it("is null when nobody matches", () => {
+    expect(avatarOf(PLAYERS, "ghost")).toBeNull();
+  });
+});
+
+describe("PromptText", () => {
+  it("lets the prompt's own language set its direction, so an English fact keeps its full stop in a Hebrew room", () => {
+    const { container } = render(<PromptText prompt="In 1932, emus won ____." answer="emus" />);
+    expect(container.firstElementChild?.getAttribute("dir")).toBe("auto");
+  });
+});

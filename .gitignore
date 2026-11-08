@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+worker-configuration.d.ts
+design/openpartygames-mvp-screens.html
+coverage/
+.vitest/
+test-results/
+playwright-report/
+
+# Scratch worktrees an agent checks out while working on a branch.
+.claude/worktrees/
+
+# Logs from `pnpm verify`.
+.verify/

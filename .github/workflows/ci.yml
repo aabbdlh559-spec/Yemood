@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Re-runs the checks and redeploys main by hand.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces its older run. Runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The pnpm version comes from packageManager in package.json.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm validate:packs
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm crap
+      - run: pnpm build
+
+  # Every game screen at three phone sizes and the TV, in English and Hebrew, held to the
+  # layout invariants. It needs no Worker and no D1, only Vite, so it runs on every push
+  # rather than only on pull requests: a screen a player cannot read or tap is a release
+  # blocker wherever it landed.
+  layout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Sharded, because this suite grew from 572 checks to over 1500: every screen is now also
+    # measured behind the keyboard and behind the browser toolbar, in both locales. Run whole it
+    # takes about fifteen minutes, which is too slow to sit on every push; four shards bring it
+    # back to roughly four. `deploy` needs `layout`, and a matrix job is only satisfied when
+    # every shard is, so nothing ships on a partial pass.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm e2e:layout --shard=${{ matrix.shard }}/4
+      - name: Upload traces from failed layout tests
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: layout-test-results-shard-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: ignore
+
+  # Full games against the real Worker, Room Durable Object and a local D1.
+  # Pull requests only: a rebase merge puts the same tree on main, and the smoke
+  # job below re-proves it boots rather than replaying seven minutes of browsers.
+  e2e:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      # The API suite and the browser games, and deliberately not `pnpm e2e`: that alias also
+      # runs the layout suite, which the sharded `layout` job above already runs in full. Every
+      # push was measuring all 1500-odd layout checks twice — once spread across four runners,
+      # then again end to end in here — which is what pushed this job toward its ceiling.
+      - run: pnpm e2e:api && pnpm e2e:browser
+      - name: Upload traces and videos from failed browser tests
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-test-results
+          path: test-results/
+          if-no-files-found: ignore
+
+  # What runs on main in place of the full suite: create a room, join it and play
+  # a round against the real Worker, Room Durable Object and D1. No browsers and no
+  # Playwright download, so it answers "does the merged commit actually work" in
+  # about a minute instead of holding the deploy for ten.
+  smoke:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # e2e:api's global setup prepares the D1 directory and starts wrangler itself.
+      - run: pnpm e2e:api
+
+  # Merging to main deploys straight to production once every check passes.
+  # Forks without a CLOUDFLARE_ACCOUNT_ID repository variable skip this job.
+  deploy:
+    needs: [check, layout, smoke]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.CLOUDFLARE_ACCOUNT_ID != ''
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://openpartygames.org
+    # Never run two deploys at once, and never cancel one halfway through.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # Migrations run before the new Worker, so they must stay compatible with the version still live.
+      - name: Apply D1 migrations
+        working-directory: apps/worker
+        run: pnpm exec wrangler d1 migrations apply openpartygames --remote
+      - name: Seed content packs
+        working-directory: apps/worker
+        run: |
+          node ../../scripts/build-pack-seed.mjs
+          pnpm exec wrangler d1 execute openpartygames --remote --file=.wrangler/pack-seed.sql
+      - name: Deploy the Worker
+        working-directory: apps/worker
+        run: pnpm exec wrangler deploy
+      - name: Check the live site
+        run: curl --fail --silent --show-error --retry 10 --retry-delay 6 --retry-all-errors https://openpartygames.org/api/health

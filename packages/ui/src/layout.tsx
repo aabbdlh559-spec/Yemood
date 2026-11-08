@@ -1,0 +1,106 @@
+// Fixed 1920x1080 TV stage and the phone column.
+import type { CSSProperties, ReactNode } from "react";
+import { useLayoutEffect, useState } from "react";
+import { RoomCodeContext } from "./room-code";
+
+export interface StageProps {
+  children: ReactNode;
+  /** Background behind the letterbox bars. */
+  background?: string;
+}
+
+/** Fixed 1920x1080 surface scaled to fit the viewport, letterboxed and centered. */
+export function Stage({ children, background = "#2B2B2B" }: StageProps) {
+  const [scale, setScale] = useState(1);
+  useLayoutEffect(() => {
+    const update = () =>
+      setScale(Math.min(window.innerWidth / 1920, window.innerHeight / 1080));
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background,
+        overflow: "hidden",
+      }}
+    >
+      <main
+        className="opg-root opg-grid-tv"
+        style={{
+          width: 1920,
+          height: 1080,
+          flexShrink: 0,
+          transform: `scale(${scale})`,
+          transformOrigin: "center center",
+          overflow: "hidden",
+        }}
+      >
+        {children}
+      </main>
+    </div>
+  );
+}
+
+export interface PhoneScreenProps {
+  children: ReactNode;
+  style?: CSSProperties;
+  /**
+   * Clamp the column to the phone instead of letting it grow. `minHeight` alone gives a
+   * column no reason to shrink, so a flexible middle keeps its content size and pushes the
+   * action under it off the bottom edge — where a player cannot tap it and nothing scrolls,
+   * because a sliver of it is still on screen.
+   *
+   * Set it on a screen built as header / flexible middle / action, where the middle has
+   * `flex: "1 1 0"` and `minHeight: 0` and can give up space. Leave it off a screen that is
+   * genuinely a long list and means to scroll.
+   */
+  fit?: boolean;
+  /**
+   * The room code every PhoneStrip inside shows — set in a no-TV room (see `phoneRoomCode`), so
+   * the rejoin path is on screen at every moment. Omit on a shared screen.
+   */
+  roomCode?: string;
+}
+
+/** Max-width 480px phone column on the paper grid. */
+export function PhoneScreen({ children, style, fit = false, roomCode }: PhoneScreenProps) {
+  return (
+    <RoomCodeContext.Provider value={roomCode}>
+      <main
+        className="opg-root opg-grid-phone"
+        style={{
+          // The reconnect banner (apps/web) sits fixed over the top and publishes its height
+          // here; the screen starts below it and gives that much of its own height up, so a
+          // `fit` screen's flexible middle absorbs the banner instead of the page growing past
+          // the viewport and pushing the bottom action below the fold.
+          minHeight: "calc(100dvh - var(--opg-banner-h, 0px))",
+          height: fit ? "calc(100dvh - var(--opg-banner-h, 0px))" : undefined,
+          // A clamped screen works by having a flexible middle that gives up space. At 200% text
+          // there comes a point where the middle has nothing left to give, and then the choice is
+          // between an action pushed off the bottom edge and a column that scrolls. Scrolling
+          // wins: the action is still reachable. At any normal size the content fits and this
+          // never engages.
+          overflowY: fit ? "auto" : undefined,
+          width: "100%",
+          maxWidth: 480,
+          margin: "0 auto",
+          marginBlockStart: "var(--opg-banner-h, 0px)",
+          padding: "20px 18px 28px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+          ...style,
+        }}
+      >
+        {children}
+      </main>
+    </RoomCodeContext.Provider>
+  );
+}

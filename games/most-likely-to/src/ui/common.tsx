@@ -1,0 +1,59 @@
+// Shared bits for the Most Likely To host and phone screens.
+import type { AvatarId, PlayerId, PlayerSummary } from "@opg/protocol";
+import { Highlight } from "@opg/ui";
+import type { MarkerProps } from "@opg/ui";
+import { useLocale } from "@opg/i18n";
+
+/** Looks a player up in the room roster; null for a kicked or unknown id. */
+export function findPlayer(
+  players: readonly PlayerSummary[],
+  id: PlayerId | null,
+): PlayerSummary | null {
+  if (id === null) return null;
+  return players.find((player) => player.id === id) ?? null;
+}
+
+/** Display name, or `someone` for a player who left (never a raw id). */
+export function nameOf(
+  players: readonly PlayerSummary[],
+  id: PlayerId | null,
+  someone: string,
+): string {
+  return findPlayer(players, id)?.name ?? someone;
+}
+
+export function avatarOf(
+  players: readonly PlayerSummary[],
+  id: PlayerId | null,
+): AvatarId | null {
+  return findPlayer(players, id)?.avatar ?? null;
+}
+
+/** The level of the phone's own title: h1 alone, h2 under a no-TV room's staged prompt (the h1). */
+export function controlsHeadingLevel(staged: boolean): 1 | 2 {
+  return staged ? 2 : 1;
+}
+
+export interface PromptLineProps {
+  prompt: string;
+  /** Font size in px for the whole line. */
+  size: number;
+  /** Renders a real heading of this level instead of a paragraph: the prompt is the screen's title. */
+  level?: MarkerProps["level"];
+}
+
+/** "Who's most likely to <prompt>?", with the prompt highlighted. */
+export function PromptLine({ prompt, size, level }: PromptLineProps) {
+  const { t } = useLocale();
+  const Tag = level === undefined ? "p" : (`h${level}` as const);
+  return (
+    <Tag style={{ margin: 0, fontSize: size, lineHeight: 1.25, fontWeight: 700 }}>
+      {t.mostLikelyTo.promptPrefix}{" "}
+      {/* The "?" lives inside the inline-block highlight: outside it, a line break is allowed
+          between the box and the "?", which stranded it on a line of its own. */}
+      <Highlight style={{ padding: "0 4px" }}>{prompt}
+        <span>?</span>
+      </Highlight>
+    </Tag>
+  );
+}

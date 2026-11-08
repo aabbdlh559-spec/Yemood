@@ -1,0 +1,31 @@
+export const results = {
+  gameOver: "Game over",
+  points: "{score} points",
+  gameEndedEarly: "{vip} ended the game early",
+  youEndedGameEarly: "You ended the game early",
+  waitingForFinalScores: "Waiting for final scores",
+  finalScores: "Final scores",
+  newBadge: "new!",
+  almostTime: "Almost time",
+  awardsComing: "Awards are coming…",
+  gotAward: "You got an award!",
+  wrapBanner: "That's a wrap!",
+  crownGoesTo: "And the crown goes to…",
+  crownDecided: "The crown is decided",
+  crownAnnounce: "The crown is decided. {crownLine}",
+  // Read aloud as each award stamps in on the finale; never shown on screen.
+  awardAnnounce: "{title} goes to {names}.",
+  youWinCrown: "You win the crown!",
+  crownWins: "{name} wins the crown!",
+  crownShares: "{names} share the crown!",
+  finishedPlace: "You finished {place}",
+  finishedPlaceWithScore: "You finished {place} with {score}",
+  thirdPlaceBang: "3rd place!",
+  secondPlaceBang: "2nd place!",
+  thirdPlaceLabel: "3rd place",
+  secondPlaceLabel: "2nd place",
+  picksNextGame: "picks the next game from their phone",
+  waitingOnVip: "Waiting on {vip} to pick the next game",
+  // Only ever needed up to 8, the highest maxPlayers any game declares. `other` is a
+  // best-effort fallback if that ever grows.
+};
