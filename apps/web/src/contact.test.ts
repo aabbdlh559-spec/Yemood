@@ -63,14 +63,14 @@ describe("canSend", () => {
 
 describe("copyDeveloperPhone", () => {
   it("copies the number and reports success", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn<typeof navigator.clipboard.writeText>().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     await expect(copyDeveloperPhone()).resolves.toBe(true);
     expect(writeText).toHaveBeenCalledWith("+15488782650");
   });
 
   it("reports failure when the clipboard refuses", async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    const writeText = vi.fn<typeof navigator.clipboard.writeText>().mockRejectedValue(new Error("denied"));
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     await expect(copyDeveloperPhone()).resolves.toBe(false);
   });
