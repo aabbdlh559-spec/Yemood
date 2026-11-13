@@ -1,13 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "openpartygames",
+  "name": "yemood",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-11",
   "compatibility_flags": ["nodejs_compat"],
-  "routes": [
-    { "pattern": "openpartygames.org", "custom_domain": true },
-    { "pattern": "www.openpartygames.org", "custom_domain": true }
-  ],
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",
@@ -24,8 +20,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "openpartygames",
-      "database_id": "f8d09c9b-6fe0-41c6-b48e-c0e2833fd9b9",
+      "database_name": "yemood-db",
+      "database_id": "972b348d-07bc-410f-993d-40a8b7fed19f",
       "migrations_dir": "migrations"
     }
   ],
@@ -51,8 +47,8 @@
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "openpartygames",
-          "database_id": "f8d09c9b-6fe0-41c6-b48e-c0e2833fd9b9",
+          "database_name": "yemood-db",
+          "database_id": "972b348d-07bc-410f-993d-40a8b7fed19f",
           "migrations_dir": "migrations"
         }
       ],
