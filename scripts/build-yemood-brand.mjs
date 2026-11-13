@@ -155,12 +155,19 @@ const BACKGROUND_XML = `<?xml version="1.0" encoding="utf-8"?>
 `;
 
 async function writeAndroidIcons() {
-  for (const { name, launcher, layer } of DENSITIES) {
-    const dir = path.join(androidRes, `mipmap-${name}`);
-    writeFile(path.join(dir, "ic_launcher.png"), await png(SVG.maskable, launcher));
-    writeFile(path.join(dir, "ic_launcher_round.png"), await png(SVG.round, launcher));
-    writeFile(path.join(dir, "yemood_icon_foreground.png"), await png(SVG.foreground, layer));
-  }
+  await Promise.all(
+    DENSITIES.map(async ({ name, launcher, layer }) => {
+      const dir = path.join(androidRes, `mipmap-${name}`);
+      const [launcherIcon, roundIcon, foregroundIcon] = await Promise.all([
+        png(SVG.maskable, launcher),
+        png(SVG.round, launcher),
+        png(SVG.foreground, layer),
+      ]);
+      writeFile(path.join(dir, "ic_launcher.png"), launcherIcon);
+      writeFile(path.join(dir, "ic_launcher_round.png"), roundIcon);
+      writeFile(path.join(dir, "yemood_icon_foreground.png"), foregroundIcon);
+    }),
+  );
   const anydpi = path.join(androidRes, "mipmap-anydpi-v26");
   writeFile(path.join(anydpi, "ic_launcher.xml"), ADAPTIVE_XML);
   writeFile(path.join(anydpi, "ic_launcher_round.xml"), ADAPTIVE_XML);
