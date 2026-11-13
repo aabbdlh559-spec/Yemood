@@ -69,7 +69,7 @@ describe("ContactDeveloper", () => {
   });
 
   it("copies the number and says so", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn<typeof navigator.clipboard.writeText>().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     renderContact();
     fireEvent.click(screen.getByRole("button", { name: CONTACT_COPY.copy }));
@@ -78,7 +78,7 @@ describe("ContactDeveloper", () => {
   });
 
   it("tells the user to copy by hand when the clipboard refuses", async () => {
-    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("no")) } });
+    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn<typeof navigator.clipboard.writeText>().mockRejectedValue(new Error("no")) } });
     renderContact();
     fireEvent.click(screen.getByRole("button", { name: CONTACT_COPY.copy }));
     expect(await screen.findByText(CONTACT_COPY.copyFailed)).toBeTruthy();
