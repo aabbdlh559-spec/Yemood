@@ -148,10 +148,10 @@ function FallbackActions() {
       <Button variant="secondary" size="lg" fullWidth onClick={onCopy}>
         {CONTACT_COPY.copy}
       </Button>
-      <div role="status" style={{ fontSize: 16, fontWeight: 700, minHeight: 22 }}>
+      <output style={{ fontSize: 16, fontWeight: 700, minHeight: 22 }}>
         {copy === "copied" ? CONTACT_COPY.copied : null}
         {copy === "failed" ? CONTACT_COPY.copyFailed : null}
-      </div>
+      </output>
     </div>
   );
 }
